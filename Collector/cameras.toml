@@ -1,0 +1,27 @@
+# CCTV 이미지 수집 설정 파일
+# - 이 파일은 "CCTV ID ↔ 이름" 매핑 기록 역할도 합니다.
+# - 카메라를 추가하려면 맨 아래 [[cameras]] 블록을 복사해 값만 바꾸면 됩니다.
+# - 경로는 작은따옴표('...')로 감싸야 역슬래시(\)가 그대로 인식됩니다.
+
+# ───────── 공통 설정 ─────────
+[settings]
+interval_minutes = 10          # 캡처 간격(분). 정각 기준 10분 단위(00,10,20,...)에 실행. 60의 약수만 허용
+save_dir = 'C:\26_2_AICapstone\TestPic'        # 이미지 저장 경로
+log_dir  = 'C:\26_2_AICapstone\TestPic\logs'   # 로그(CSV, 텍스트) 저장 경로
+timeout_sec = 20               # 스트림 열기·프레임 읽기 타임아웃(초)
+retry_count = 2                # 한 회차 안에서 재시도할 최대 횟수 (최초 시도 제외 → 최대 3회 접속)
+retry_wait_sec = 10            # 재시도 간격(초). UTIC IP 차단 기준 때문에 10 미만은 허용하지 않음
+warn_after_failures = 3        # 같은 카메라가 이 회차 수만큼 연속 실패하면 경고 1회
+
+# ───────── 카메라 목록 ([[cameras]] 블록 하나 = 카메라 한 대) ─────────
+
+# 용현사거리 (인천 미추홀구)
+[[cameras]]
+cctv_id   = "L020172"          # UTIC 공식 CCTV 번호 (파일명·로그에 사용)
+name      = "용현사거리"        # 카메라 이름 (UTIC 표기 원문)
+agency    = "인천교통정보센터"   # 영상 제공 기관
+stream_id = "L204"             # 스트림 ID: 공식 파일에 없어 브라우저에서 확인한 값 (확인일 2026-09-15)
+url       = "https://cctv.fitic.go.kr/cctv/L204.stream/playlist.m3u8"  # HLS 영상 주소 (stream_id로 구성)
+lon = 126.650032               # 경도
+lat = 37.456271                # 위도
+enabled = true                 # 사용 여부 (false면 수집하지 않음)
