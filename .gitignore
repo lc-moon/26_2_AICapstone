@@ -1,0 +1,15 @@
+# GitHub에 올리지 않을 파일 목록
+
+# 인증키 (절대 올리지 않음)
+.env
+
+# 수집 이미지·로그 (용량이 계속 늘어나고, 사람·차량 번호판이 찍힐 수 있음)
+TestPic/
+*.jpg
+
+# UTIC에서 받은 원본 자료 (재배포 조건이 불확실함)
+APICheck/cctvOpenData_list.html
+APICheck/OpenDataCCTV.xlsx
+
+# Python 자동 캐시
+__pycache__/
