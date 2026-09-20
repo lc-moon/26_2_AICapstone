@@ -13,3 +13,8 @@ APICheck/OpenDataCCTV.xlsx
 
 # Python 자동 캐시
 __pycache__/
+
+# 숭의 PM2.5 분석 산출물 (API 원문·정제 데이터·그래프는 재생성 가능)
+Analysis/songui_pm25/raw/
+Analysis/songui_pm25/data/
+Analysis/songui_pm25/charts/
