@@ -410,7 +410,9 @@ def main():
 
     try:
         s, cameras = load_config(args.config)
-        save_dir, log_dir = Path(s["save_dir"]), Path(s["log_dir"])
+        # 상대경로는 저장소 루트 기준으로 푼다 — 같은 설정 파일로 Windows와 Linux 양쪽에서 돌리기 위함
+        root = BASE_DIR.parent
+        save_dir, log_dir = (root / s["save_dir"]), (root / s["log_dir"])
         save_dir.mkdir(parents=True, exist_ok=True)
         log_dir.mkdir(parents=True, exist_ok=True)
     except (OSError, tomllib.TOMLDecodeError, ValueError) as e:

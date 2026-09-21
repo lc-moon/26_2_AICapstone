@@ -1,0 +1,4 @@
+# 수집기 실행에 필요한 패키지
+opencv-python-headless   # GUI 없는 서버용 OpenCV (HLS 프레임 캡처)
+requests                 # CCTV 목록·기상청·Discord 호출
+python-dotenv            # .env에서 인증키 읽기

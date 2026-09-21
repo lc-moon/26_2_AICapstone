@@ -9,8 +9,8 @@
 
 [settings]
 interval_minutes = 20          # 캡처 간격(분). 정각 기준(00,20,40). 60의 약수만 허용
-save_dir = 'C:/26_2_AICapstone/data/images'
-log_dir  = 'C:/26_2_AICapstone/data/logs'
+save_dir = 'data/images'      # 상대경로면 저장소 루트 기준 (Windows·Linux 공용)
+log_dir  = 'data/logs'
 timeout_sec = 20               # 스트림 열기·프레임 읽기 타임아웃(초)
 retry_count = 2                # 한 회차 안에서 재시도할 최대 횟수
 retry_wait_sec = 10            # 재시도 간격(초). 10 미만은 허용하지 않음
