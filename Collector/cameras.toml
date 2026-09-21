@@ -1,27 +1,105 @@
-# CCTV 이미지 수집 설정 파일
-# - 이 파일은 "CCTV ID ↔ 이름" 매핑 기록 역할도 합니다.
-# - 카메라를 추가하려면 맨 아래 [[cameras]] 블록을 복사해 값만 바꾸면 됩니다.
-# - 경로는 작은따옴표('...')로 감싸야 역슬래시(\)가 그대로 인식됩니다.
+# CCTV 이미지 수집 설정
+#
+# 카메라는 번호(id)만 적습니다. 이름·좌표·스트림 주소는 실행할 때
+# 인천교통정보센터 목록 API로 조회해서 url_cache.json에 저장합니다.
+# 따라서 스트림 주소가 바뀌어도 설정 파일을 고칠 필요가 없습니다.
+#
+# 선정 근거: Screening/screen_fitic.py 로 237대를 자동 선별 후 육안 검수 (2026-09-21)
+# 화각이 도는(PTZ) 부평사거리(50), 영종도삼목지하차도(234)는 제외했습니다.
 
-# ───────── 공통 설정 ─────────
 [settings]
-interval_minutes = 10          # 캡처 간격(분). 정각 기준 10분 단위(00,10,20,...)에 실행. 60의 약수만 허용
-save_dir = 'C:\26_2_AICapstone\TestPic'        # 이미지 저장 경로
-log_dir  = 'C:\26_2_AICapstone\TestPic\logs'   # 로그(CSV, 텍스트) 저장 경로
+interval_minutes = 20          # 캡처 간격(분). 정각 기준(00,20,40). 60의 약수만 허용
+save_dir = 'C:/26_2_AICapstone/data/images'
+log_dir  = 'C:/26_2_AICapstone/data/logs'
 timeout_sec = 20               # 스트림 열기·프레임 읽기 타임아웃(초)
-retry_count = 2                # 한 회차 안에서 재시도할 최대 횟수 (최초 시도 제외 → 최대 3회 접속)
-retry_wait_sec = 10            # 재시도 간격(초). UTIC IP 차단 기준 때문에 10 미만은 허용하지 않음
-warn_after_failures = 3        # 같은 카메라가 이 회차 수만큼 연속 실패하면 경고 1회
+retry_count = 2                # 한 회차 안에서 재시도할 최대 횟수
+retry_wait_sec = 10            # 재시도 간격(초). 10 미만은 허용하지 않음
+warn_after_failures = 3        # 같은 카메라가 이 회차 수만큼 연속 실패하면 알림 1회
+min_sun_altitude_deg = 0.0     # 태양고도가 이 값 미만인 카메라는 건너뜀 (야간 제외)
+jpeg_quality = 95              # 저장 품질. 원경의 미세한 대비가 곧 신호라 낮추면 신호가 함께 뭉개짐
 
-# ───────── 카메라 목록 ([[cameras]] 블록 하나 = 카메라 한 대) ─────────
+# ───────── 카메라 목록 (자동 선별 점수 높은 순) ─────────
 
-# 용현사거리 (인천 미추홀구)
 [[cameras]]
-cctv_id   = "L020172"          # UTIC 공식 CCTV 번호 (파일명·로그에 사용)
-name      = "용현사거리"        # 카메라 이름 (UTIC 표기 원문)
-agency    = "인천교통정보센터"   # 영상 제공 기관
-stream_id = "L204"             # 스트림 ID: 공식 파일에 없어 브라우저에서 확인한 값 (확인일 2026-09-15)
-url       = "https://cctv.fitic.go.kr/cctv/L204.stream/playlist.m3u8"  # HLS 영상 주소 (stream_id로 구성)
-lon = 126.650032               # 경도
-lat = 37.456271                # 위도
-enabled = true                 # 사용 여부 (false면 수집하지 않음)
+id = 121    # 남동공단입구사거리  (960x540, 점수 87.5)
+enabled = true
+
+[[cameras]]
+id = 113    # 송도1교사거리  (960x540, 점수 80.4)
+enabled = true
+
+[[cameras]]
+id = 124    # 송도5교사거리  (960x540, 점수 77.9)
+enabled = true
+
+[[cameras]]
+id = 131    # 외암사거리  (960x540, 점수 73.1)
+enabled = true
+
+[[cameras]]
+id = 143    # 서인천IC(하행)  (1280x720, 점수 72.8)
+enabled = true
+
+[[cameras]]
+id = 65     # 경서삼거리  (960x540, 점수 72.6)
+enabled = true
+
+[[cameras]]
+id = 215    # 인천교삼거리  (960x540, 점수 71.4)
+enabled = true
+
+[[cameras]]
+id = 62     # 가좌IC고가교  (960x540, 점수 70.2)
+enabled = true
+
+[[cameras]]
+id = 11     # 을왕해수욕장  (960x540, 점수 69.8)
+enabled = true
+
+[[cameras]]
+id = 13     # 능해IC  (960x540, 점수 68.2)
+enabled = true
+
+[[cameras]]
+id = 133    # 장수사거리  (960x540, 점수 63.7)
+enabled = true
+
+[[cameras]]
+id = 103    # 초지교사거리  (960x540, 점수 61.9)
+enabled = true
+
+[[cameras]]
+id = 10042  # 송도-스마트밸리#2  (1280x720, 점수 60.6)
+enabled = true
+
+[[cameras]]
+id = 112    # 옹암오거리  (960x540, 점수 59.8)
+enabled = true
+
+[[cameras]]
+id = 87     # 청운교  (960x540, 점수 59.7)
+enabled = true
+
+[[cameras]]
+id = 79     # 시천교  (960x540, 점수 57.8)
+enabled = true
+
+[[cameras]]
+id = 212    # 효성교사거리  (960x540, 점수 52.7)
+enabled = true
+
+[[cameras]]
+id = 17     # 문학경기장사거리  (960x540, 점수 48.6)
+enabled = true
+
+[[cameras]]
+id = 10041  # 송도-송도블루오션골프클럽#2  (640x360, 점수 46.6)
+enabled = true
+
+[[cameras]]
+id = 134    # 장승백이사거리  (960x540, 점수 42.5)
+enabled = true
+
+[[cameras]]
+id = 128    # 소래나들목삼거리  (960x540, 점수 40.3)
+enabled = true
