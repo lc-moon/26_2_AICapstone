@@ -13,10 +13,13 @@ import time
 import tomllib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import unquote
 
 import cv2
 import requests
 from dotenv import dotenv_values
+
+import weather
 
 # ───────── 상수 ─────────
 KST = timezone(timedelta(hours=9), "KST")  # PC 시간대 설정과 무관하게 한국 시각 고정
@@ -26,6 +29,7 @@ CACHE_PATH = BASE_DIR / "url_cache.json"   # 목록 API 응답 보관 (조회 �
 ENV_PATH = BASE_DIR.parent / ".env"
 TIME_FMT = "%Y-%m-%d %H:%M:%S"
 LATE_GRACE_SEC = 60  # 예정 시각보다 이 초 이상 늦게 도달한 회차는 건너뜀
+WEATHER_MINUTE = 40  # 기상 실황을 받는 분. 자료 게시가 매시 15~40분 사이라 이때 받는다
 
 # 인천교통정보센터 CCTV 목록 (지도 페이지가 쓰는 엔드포인트)
 LIST_URL = "https://www.fitic.go.kr/gis/selectListData.do"
@@ -288,13 +292,15 @@ def wait_until(target):
 
 
 class Collector:
-    def __init__(self, cams, s, save_dir, csv_path, notifier):
+    def __init__(self, cams, s, save_dir, csv_path, notifier, kma_key=""):
         self.cams, self.s = cams, s
         self.save_dir, self.csv_path, self.notify = save_dir, csv_path, notifier
+        self.kma_key = kma_key
+        self.weather_csv = csv_path.parent / "weather.csv"
         self.fail_streak = {c["id"]: 0 for c in cams}   # 카메라별 연속 실패 회차 수
         self.alerted = set()                            # 이미 알림을 보낸 카메라
         self.day = None                                 # 일일 요약 기준 날짜
-        self.daily = {"success": 0, "fail": 0, "skipped": 0}
+        self.daily = {"success": 0, "fail": 0, "skipped": 0, "weather_ok": 0, "weather_all": 0}
 
     # -- 카메라별 연속 실패 --
     def update_streak(self, cam, result):
@@ -319,10 +325,11 @@ class Collector:
             return
         if slot.date() != self.day:
             d = self.daily
-            self.notify.send(f"📊 {self.day} 수집 요약 — 성공 {d['success']} / 실패 {d['fail']} / "
-                             f"건너뜀 {d['skipped']} | 카메라 {len(self.cams)}대")
+            self.notify.send(f"📊 {self.day} 수집 요약 — 이미지 성공 {d['success']} / 실패 {d['fail']} / "
+                             f"건너뜀 {d['skipped']} | 기상 {d['weather_ok']}/{d['weather_all']} "
+                             f"| 카메라 {len(self.cams)}대")
             self.day = slot.date()
-            self.daily = {"success": 0, "fail": 0, "skipped": 0}
+            self.daily = {"success": 0, "fail": 0, "skipped": 0, "weather_ok": 0, "weather_all": 0}
 
     def run_slot(self, slot):
         """한 회차 처리: 카메라를 순서대로 캡처 (동시 접속 없음)"""
@@ -350,6 +357,19 @@ class Collector:
             append_csv(self.csv_path, row)
             self.update_streak(cam, row["result"])
             results.append(row["result"])
+
+        # 기상 실황은 매시 한 번만. 이미지 캡처가 끝난 뒤에 받고, 실패해도 이미지에 영향이 없도록 격리한다
+        if slot.minute == WEATHER_MINUTE:
+            try:
+                ok_w, all_w = weather.collect(self.kma_key, self.cams, self.weather_csv,
+                                              slot.replace(minute=0), now_kst)
+                self.daily["weather_ok"] += ok_w
+                self.daily["weather_all"] += all_w
+                if all_w and ok_w == 0:
+                    self.notify.send(f"🚨 {slot:%m-%d %H}시 기상 수집 전멸 — {all_w}개 격자 전부 실패. "
+                                     f"초단기실황은 백필이 안 되므로 이 시간대는 복구 불가")
+            except Exception:
+                log.exception("기상 수집 중 예상치 못한 예외")
 
         for r in results:
             self.daily[r] = self.daily.get(r, 0) + 1
@@ -398,7 +418,14 @@ def main():
         sys.exit(1)
 
     setup_logging(log_dir)
-    notifier = Notifier(dotenv_values(ENV_PATH).get("DISCORD_WEBHOOK_URL", ""))
+    env = dotenv_values(ENV_PATH)
+    notifier = Notifier(env.get("DISCORD_WEBHOOK_URL", ""))
+    # 공공데이터포털은 계정당 인증키가 하나라, 별도 키가 없으면 에어코리아 키를 그대로 쓴다
+    kma_key = env.get("KMA_API_KEY") or env.get("AIRKOREA_API_KEY", "")
+    if kma_key and "%" in kma_key:
+        kma_key = unquote(kma_key)   # requests가 다시 인코딩하므로 디코딩된 형태로 넘긴다
+    if not kma_key:
+        log.warning("기상청 인증키가 .env에 없습니다 → 기상 수집을 건너뜁니다")
     if not notifier.webhook:
         log.warning("DISCORD_WEBHOOK_URL이 .env에 없습니다 → 알림 없이 로그만 남깁니다")
 
@@ -411,7 +438,8 @@ def main():
 
     log.info(f"시작 | 모드: {'1회 테스트' if args.once else '반복 수집'} | "
              f"간격 {s['interval_minutes']}분 | 카메라 {len(cams)}대 | "
-             f"야간 기준 태양고도 {s['min_sun_altitude_deg']}도")
+             f"야간 기준 태양고도 {s['min_sun_altitude_deg']}도 | "
+             f"기상 격자 {len(weather.grids_of(cams))}개 (매시 {WEATHER_MINUTE}분)")
 
     csv_path = log_dir / "capture_log.csv"
     try:
@@ -423,7 +451,7 @@ def main():
                 append_csv(csv_path, row)
         else:
             notifier.send(f"▶️ 수집 시작 — 카메라 {len(cams)}대, {s['interval_minutes']}분 간격")
-            Collector(cams, s, save_dir, csv_path, notifier).run()
+            Collector(cams, s, save_dir, csv_path, notifier, kma_key).run()
     except KeyboardInterrupt:
         log.info("사용자 종료 요청(Ctrl+C)")
         notifier.send("⏹️ 수집 중단 — 사용자 종료(Ctrl+C)")

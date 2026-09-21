@@ -53,10 +53,6 @@ id = 62     # 가좌IC고가교  (960x540, 점수 70.2)
 enabled = true
 
 [[cameras]]
-id = 11     # 을왕해수욕장  (960x540, 점수 69.8)
-enabled = true
-
-[[cameras]]
 id = 13     # 능해IC  (960x540, 점수 68.2)
 enabled = true
 
