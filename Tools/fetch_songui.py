@@ -16,9 +16,10 @@ import requests
 from dotenv import dotenv_values
 
 # 경로 설정: 스크립트 위치 기준
-BASE_DIR = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]   # 리포 루트
+BASE_DIR = ROOT / "data" / "songui_pm25"
 RAW_DIR = BASE_DIR / "raw"
-ENV_PATH = BASE_DIR.parents[1] / ".env"  # C:\26_2_AICapstone\.env
+ENV_PATH = ROOT / ".env"
 
 # API 설정 (팀원이 검증한 값)
 URL = "http://apis.data.go.kr/B552584/ArpltnInforInqireSvc/getMsrstnAcctoRltmMesureDnsty"

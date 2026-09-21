@@ -13,7 +13,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 # 경로 설정
-BASE_DIR = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]   # 리포 루트
+BASE_DIR = ROOT / "data" / "songui_pm25"
 RAW_DIR = BASE_DIR / "raw"
 DATA_DIR = BASE_DIR / "data"
 CHART_DIR = BASE_DIR / "charts"
