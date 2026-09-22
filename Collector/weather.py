@@ -54,16 +54,16 @@ def fetch_ncst(key, nx, ny, when, timeout=20):
 
 
 def collect(key, cameras, csv_path, slot, now_fn, retry_wait=10):
-    """격자별로 slot 시각의 실황을 받아 CSV에 쌓는다. 반환: (성공 수, 전체 수)
+    """격자별로 slot 시각의 실황을 받아 CSV에 쌓는다. 반환: (성공 수, 전체 수, 대표 실패 사유)
 
     자료는 매시 정시 기준이고 게시는 15~40분 사이다. 이 함수는 :40 회차에 호출되므로
     같은 시각 자료를 바로 받을 수 있고, 아직 없으면 직전 시간으로 한 번 더 시도한다."""
     if not key:
         log.warning("기상 수집 건너뜀 — 인증키 없음")
-        return 0, 0
+        return 0, 0, "인증키 없음"
 
     targets = grids_of(cameras)
-    rows, ok, fallback = [], 0, 0
+    rows, ok, fallback, first_err = [], 0, 0, None
     for nx, ny in targets:
         data, err, got = None, None, None
         for base in (slot, slot - timedelta(hours=1)):
@@ -87,6 +87,8 @@ def collect(key, cameras, csv_path, slot, now_fn, retry_wait=10):
         if data:
             ok += 1
             fallback += (got != slot)
+        elif first_err is None:
+            first_err = err
 
     try:
         new_file = not csv_path.exists()
@@ -105,4 +107,4 @@ def collect(key, cameras, csv_path, slot, now_fn, retry_wait=10):
                  f"예시 기온 {sample.get('T1H')}℃ 습도 {sample.get('REH')}% 강수형태 {sample.get('PTY')}")
     else:
         log.error(f"기상 수집 전멸 — {len(targets)}개 격자 전부 실패")
-    return ok, len(targets)
+    return ok, len(targets), first_err

@@ -8,6 +8,7 @@ import csv
 import json
 import logging
 import math
+import shutil
 import sys
 import time
 import tomllib
@@ -29,6 +30,7 @@ CACHE_PATH = BASE_DIR / "url_cache.json"   # 목록 API 응답 보관 (조회 �
 ENV_PATH = BASE_DIR.parent / ".env"
 TIME_FMT = "%Y-%m-%d %H:%M:%S"
 LATE_GRACE_SEC = 60  # 예정 시각보다 이 초 이상 늦게 도달한 회차는 건너뜀
+DISK_WARN_PCT = 80   # 일일 요약에서 디스크 사용률이 이 값을 넘으면 경고를 따로 보낸다
 WEATHER_MINUTE = 40  # 기상 실황을 받는 분. 자료 게시가 매시 15~40분 사이라 이때 받는다
 
 # 인천교통정보센터 CCTV 목록 (지도 페이지가 쓰는 엔드포인트)
@@ -101,6 +103,13 @@ def append_csv(csv_path, row):
             w.writerow(row)
     except OSError as e:
         log.error(f"CSV 기록 실패({type(e).__name__}: {e}) → 누락된 행: {row}")
+
+
+def disk_usage(path):
+    """path가 속한 디스크의 (사용률 %, 남은 GB). df의 Use%·Avail과 같은 기준으로 계산한다.
+    경로가 없으면(로컬 정리 중 삭제 등) 저장소 쪽 경로로 물러나 요약이 죽지 않게 한다."""
+    total, used, free = shutil.disk_usage(path if path.exists() else BASE_DIR)
+    return round(used / (used + free) * 100), round(free / 1024 ** 3, 1)
 
 
 # ───────── 알림 ─────────
@@ -325,9 +334,14 @@ class Collector:
             return
         if slot.date() != self.day:
             d = self.daily
+            pct, free_gb = disk_usage(self.save_dir)
             self.notify.send(f"📊 {self.day} 수집 요약 — 이미지 성공 {d['success']} / 실패 {d['fail']} / "
                              f"건너뜀 {d['skipped']} | 기상 {d['weather_ok']}/{d['weather_all']} "
-                             f"| 카메라 {len(self.cams)}대")
+                             f"| 카메라 {len(self.cams)}대 | 디스크 {pct}% (여유 {free_gb}GB)")
+            # 하루 증가량이 1%에 못 미쳐서 하루 한 번 확인으로 충분하다
+            if pct >= DISK_WARN_PCT:
+                self.notify.send(f"⚠️ 디스크 {pct}% 사용 — 남은 공간 {free_gb}GB. "
+                                 f"가득 차면 수집이 조용히 실패한다. GCS로 옮기고 로컬을 정리할 것")
             self.day = slot.date()
             self.daily = {"success": 0, "fail": 0, "skipped": 0, "weather_ok": 0, "weather_all": 0}
 
@@ -361,13 +375,17 @@ class Collector:
         # 기상 실황은 매시 한 번만. 이미지 캡처가 끝난 뒤에 받고, 실패해도 이미지에 영향이 없도록 격리한다
         if slot.minute == WEATHER_MINUTE:
             try:
-                ok_w, all_w = weather.collect(self.kma_key, self.cams, self.weather_csv,
-                                              slot.replace(minute=0), now_kst)
+                ok_w, all_w, err_w = weather.collect(self.kma_key, self.cams, self.weather_csv,
+                                                     slot.replace(minute=0), now_kst)
                 self.daily["weather_ok"] += ok_w
                 self.daily["weather_all"] += all_w
+                # 초단기실황은 1일치만 제공되어 지나가면 복구가 안 된다. 그래서 일부 실패도 바로 알린다
                 if all_w and ok_w == 0:
                     self.notify.send(f"🚨 {slot:%m-%d %H}시 기상 수집 전멸 — {all_w}개 격자 전부 실패. "
-                                     f"초단기실황은 백필이 안 되므로 이 시간대는 복구 불가")
+                                     f"초단기실황은 백필이 안 되므로 이 시간대는 복구 불가 ({err_w})")
+                elif ok_w < all_w:
+                    self.notify.send(f"⚠️ {slot:%m-%d %H}시 기상 {all_w - ok_w}/{all_w} 격자 실패 — "
+                                     f"{err_w}. 백필이 안 되므로 이 격자의 이 시간은 복구 불가")
             except Exception:
                 log.exception("기상 수집 중 예상치 못한 예외")
 
