@@ -63,24 +63,30 @@ def collect(key, cameras, csv_path, slot, now_fn, retry_wait=10):
         return 0, 0
 
     targets = grids_of(cameras)
-    rows, ok = [], 0
+    rows, ok, fallback = [], 0, 0
     for nx, ny in targets:
-        data, err, base = None, None, slot
+        data, err, got = None, None, None
         for base in (slot, slot - timedelta(hours=1)):
             try:
                 data, err = fetch_ncst(key, nx, ny, base)
             except Exception as e:
                 data, err = None, f"{type(e).__name__}: {e}"
             if data:
+                got = base
                 break
             log.warning(f"기상 {nx},{ny} {base:%m-%d %H}시 실패: {err}")
             time.sleep(1)
 
-        row = {"base_date": f"{base:%Y%m%d}", "base_time": f"{base:%H}00", "nx": nx, "ny": ny,
+        # 실패한 행은 받아온 시각이 아니라 채우려던 시각(slot)으로 적는다.
+        # 대체 시각으로 적으면 그 시각 행이 중복되고, slot 시각은 결측인 것조차 드러나지 않는다
+        stamp = got or slot
+        row = {"base_date": f"{stamp:%Y%m%d}", "base_time": f"{stamp:%H}00", "nx": nx, "ny": ny,
                "fetched_at": f"{now_fn():%Y-%m-%d %H:%M:%S}", "error": "" if data else err}
         row.update({c: (data or {}).get(c, "") for c in CATEGORIES})
         rows.append(row)
-        ok += bool(data)
+        if data:
+            ok += 1
+            fallback += (got != slot)
 
     try:
         new_file = not csv_path.exists()
@@ -94,7 +100,8 @@ def collect(key, cameras, csv_path, slot, now_fn, retry_wait=10):
 
     if ok:
         sample = next((r for r in rows if not r["error"]), {})
-        log.info(f"기상 수집 {ok}/{len(targets)} 격자 | {slot:%m-%d %H}시 | "
+        log.info(f"기상 수집 {ok}/{len(targets)} 격자 | {slot:%m-%d %H}시"
+                 f"{f' (직전 시간으로 대체 {fallback}개)' if fallback else ''} | "
                  f"예시 기온 {sample.get('T1H')}℃ 습도 {sample.get('REH')}% 강수형태 {sample.get('PTY')}")
     else:
         log.error(f"기상 수집 전멸 — {len(targets)}개 격자 전부 실패")
