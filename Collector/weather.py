@@ -52,7 +52,7 @@ def fetch_ncst(key, nx, ny, when, timeout=20):
     return {i["category"]: i["obsrValue"] for i in body["body"]["items"]["item"]}, None
 
 
-def collect(key, cameras, csv_path, slot, now_fn, retry_wait=10):
+def collect(key, cameras, csv_path, slot, now_fn):
     """격자별로 slot 시각의 실황을 받아 CSV에 쌓는다. 반환: (성공 수, 전체 수, 대표 실패 사유)
 
     자료는 매시 정시 기준이고 게시는 15~40분 사이다. 이 함수는 :40 회차에 호출되므로
@@ -67,7 +67,9 @@ def collect(key, cameras, csv_path, slot, now_fn, retry_wait=10):
     rows, ok, first_err = [], 0, None
     for nx, ny in targets:
         data, err = None, None
-        for attempt in (1, 2):   # 같은 시각으로 두 번. 일시적인 오류를 넘기기 위한 재시도
+        # 같은 시각으로 두 번 시도한다. 간격이 1초인 것은 공공데이터포털에 일일 호출 한도만
+        # 있고 초당 제한이 없어서다 (카메라 쪽 10초는 UTIC의 호출 빈도 차단 기준 때문이라 다르다)
+        for attempt in (1, 2):
             try:
                 data, err = fetch_ncst(key, nx, ny, slot)
             except Exception as e:
