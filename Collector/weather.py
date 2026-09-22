@@ -5,7 +5,6 @@ import csv
 import logging
 import math
 import time
-from datetime import timedelta
 
 import requests
 
@@ -57,36 +56,33 @@ def collect(key, cameras, csv_path, slot, now_fn, retry_wait=10):
     """격자별로 slot 시각의 실황을 받아 CSV에 쌓는다. 반환: (성공 수, 전체 수, 대표 실패 사유)
 
     자료는 매시 정시 기준이고 게시는 15~40분 사이다. 이 함수는 :40 회차에 호출되므로
-    같은 시각 자료를 바로 받을 수 있고, 아직 없으면 직전 시간으로 한 번 더 시도한다."""
+    같은 시각 자료를 바로 받을 수 있다. 받지 못하면 그 시각은 결측으로 남긴다 —
+    직전 시간으로 물러나면 이미 한 시간 전에 받아둔 자료가 중복되고, 정작 비어 있는
+    시각이 성공으로 집계되어 결측이 드러나지 않는다."""
     if not key:
         log.warning("기상 수집 건너뜀 — 인증키 없음")
         return 0, 0, "인증키 없음"
 
     targets = grids_of(cameras)
-    rows, ok, fallback, first_err = [], 0, 0, None
+    rows, ok, first_err = [], 0, None
     for nx, ny in targets:
-        data, err, got = None, None, None
-        for base in (slot, slot - timedelta(hours=1)):
+        data, err = None, None
+        for attempt in (1, 2):   # 같은 시각으로 두 번. 일시적인 오류를 넘기기 위한 재시도
             try:
-                data, err = fetch_ncst(key, nx, ny, base)
+                data, err = fetch_ncst(key, nx, ny, slot)
             except Exception as e:
                 data, err = None, f"{type(e).__name__}: {e}"
             if data:
-                got = base
                 break
-            log.warning(f"기상 {nx},{ny} {base:%m-%d %H}시 실패: {err}")
+            log.warning(f"기상 {nx},{ny} {slot:%m-%d %H}시 {attempt}차 실패: {err}")
             time.sleep(1)
 
-        # 실패한 행은 받아온 시각이 아니라 채우려던 시각(slot)으로 적는다.
-        # 대체 시각으로 적으면 그 시각 행이 중복되고, slot 시각은 결측인 것조차 드러나지 않는다
-        stamp = got or slot
-        row = {"base_date": f"{stamp:%Y%m%d}", "base_time": f"{stamp:%H}00", "nx": nx, "ny": ny,
+        row = {"base_date": f"{slot:%Y%m%d}", "base_time": f"{slot:%H}00", "nx": nx, "ny": ny,
                "fetched_at": f"{now_fn():%Y-%m-%d %H:%M:%S}", "error": "" if data else err}
         row.update({c: (data or {}).get(c, "") for c in CATEGORIES})
         rows.append(row)
         if data:
             ok += 1
-            fallback += (got != slot)
         elif first_err is None:
             first_err = err
 
@@ -102,8 +98,7 @@ def collect(key, cameras, csv_path, slot, now_fn, retry_wait=10):
 
     if ok:
         sample = next((r for r in rows if not r["error"]), {})
-        log.info(f"기상 수집 {ok}/{len(targets)} 격자 | {slot:%m-%d %H}시"
-                 f"{f' (직전 시간으로 대체 {fallback}개)' if fallback else ''} | "
+        log.info(f"기상 수집 {ok}/{len(targets)} 격자 | {slot:%m-%d %H}시 | "
                  f"예시 기온 {sample.get('T1H')}℃ 습도 {sample.get('REH')}% 강수형태 {sample.get('PTY')}")
     else:
         log.error(f"기상 수집 전멸 — {len(targets)}개 격자 전부 실패")
