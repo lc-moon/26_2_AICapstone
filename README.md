@@ -10,6 +10,7 @@ CCTV 영상에서 이미지를 주기적으로 모아, 미세먼지(PM2.5) 농�
 | [docs/프로젝트.md](docs/프로젝트.md) | 이 프로젝트가 무엇이고 어떤 데이터를 쓰는지 |
 | [docs/현황.md](docs/현황.md) | **지금 어떤 상태인지.** 확정된 사양과 사실, 남은 작업 |
 | [docs/운영.md](docs/운영.md) | 서버에 올려 돌리는 방법, 문제가 생겼을 때 |
+| [docs/인터페이스_모델출력.md](docs/인터페이스_모델출력.md) | 조원(백엔드·프론트)에게 넘기는 데이터 형식 |
 | [docs/기록/](docs/기록/) | 주차별 진행 기록. 순서대로 읽으면 프로젝트가 어떻게 굴러왔는지 보임 |
 
 **앞의 셋은 갱신되는 문서**라 항상 최신 내용만 담고, **`기록/`은 과거 시점이라 갱신하지 않습니다.**
@@ -19,6 +20,7 @@ CCTV 영상에서 이미지를 주기적으로 모아, 미세먼지(PM2.5) 농�
 ```
 C:\26_2_AICapstone\
 ├─ README.md            이 설명서
+├─ CLAUDE.md            Claude Code가 매 세션 읽는 작업 규칙
 ├─ .env                 인증키 (공유·업로드 금지)
 │
 ├─ .claude\             Claude Code 설정
@@ -28,21 +30,33 @@ C:\26_2_AICapstone\
 │  ├─ 프로젝트.md          배경·가설·데이터 소스 명세
 │  ├─ 현황.md              지금 상태·확정된 사실·남은 작업
 │  ├─ 운영.md              배포 절차·운영·문제 대응
+│  ├─ 인터페이스_모델출력.md  조원에게 넘기는 데이터 형식
 │  └─ 기록\               주차별 진행 기록 (날짜순)
 │
 ├─ Collector\           상시 실행 — 이미지 수집기
 │  ├─ collect_cctv.py
+│  ├─ weather.py           기상청 초단기실황 수집 (수집기가 매시 호출)
 │  ├─ cameras.toml         수집 설정과 카메라 목록
 │  └─ url_cache.json       목록 API 응답 캐시 (자동 생성)
 │
 ├─ Tools\               1회성 스크립트
-│  ├─ screen_fitic.py      CCTV 화각 자동 스크리닝 (카메라 선정용)
-│  ├─ fetch_songui.py      에어코리아 PM2.5 조회
-│  └─ analyze_songui.py    PM2.5 등급 분포 분석
+│  ├─ screen_fitic.py          CCTV 화각 자동 스크리닝 (카메라 선정용)
+│  ├─ contact_sheet.py         수집 이미지를 한 장으로 붙여 보기
+│  ├─ make_prototype_data.py   조원에게 넘길 모델 출력 샘플 생성
+│  ├─ fetch_songui.py          에어코리아 PM2.5 조회
+│  └─ analyze_songui.py        PM2.5 등급 분포 분석
+│
+├─ deploy\              서버 설치 스크립트
+│  └─ install_service.sh   systemd 서비스 등록 (docs/운영.md 참고)
+│
+├─ model_output\        조원에게 넘기는 데이터 (git 포함)
+│  ├─ cameras.json         카메라 번호·이름·좌표
+│  └─ values.json          시각별 추정 농도
 │
 ├─ data\                모든 생성물 (git 제외, 스크립트로 재생성 가능)
 │  ├─ images\              수집 이미지
-│  ├─ logs\                수집 로그
+│  ├─ logs\                수집 로그·기상 CSV
+│  ├─ contact_sheets\      이미지 확인용 모아보기
 │  ├─ screening\           화각 스크리닝 산출물
 │  └─ songui_pm25\         PM2.5 원본·정제·차트
 │
@@ -82,6 +96,18 @@ python Tools\screen_fitic.py                전체 촬영 후 채점 (약 6분)
 python Tools\screen_fitic.py --rescore      저장된 프레임으로 재채점 (약 5초)
 python Tools\screen_fitic.py --ptz-check    화각이 돌아가는 카메라 찾기
 ```
+
+### `contact_sheet.py` — 수집 이미지 확인
+여러 장을 격자로 붙여 한 장으로 만듭니다. 서버에 쌓인 이미지를 한 장씩 내려받지 않고 훑어볼 때 씁니다.
+
+```
+python Tools\contact_sheet.py --date 2026-09-28 --time 1200     그 시각의 카메라 전체
+python Tools\contact_sheet.py --date 2026-09-28 --camera 113    그 카메라의 하루
+```
+
+### `make_prototype_data.py` — 조원에게 넘길 샘플 생성
+`model_output\`의 두 파일을 만듭니다. 카메라 번호·이름·좌표는 실제 값이고 농도만 가상입니다.
+형식은 `docs/인터페이스_모델출력.md` 참고.
 
 ### `fetch_songui.py` / `analyze_songui.py` — PM2.5 라벨 분석
 에어코리아에서 측정소 데이터를 받아 농도 등급 분포를 집계합니다.
