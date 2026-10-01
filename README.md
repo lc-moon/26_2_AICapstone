@@ -35,12 +35,13 @@ C:\26_2_AICapstone\
 │
 ├─ Collector\           상시 실행 — 이미지 수집기
 │  ├─ collect_cctv.py
-│  ├─ weather.py           기상청 초단기실황 수집 (수집기가 매시 호출)
+│  ├─ weather.py           기상청 초단기실황 수집 (수집기가 매시 호출, 학습에는 안 씀·검증용)
 │  ├─ cameras.toml         수집 설정과 카메라 목록
 │  └─ url_cache.json       목록 API 응답 캐시 (자동 생성)
 │
 ├─ Tools\               1회성 스크립트
 │  ├─ screen_fitic.py          CCTV 화각 자동 스크리닝 (카메라 선정용)
+│  ├─ build_labels.py          사진마다 기상(1분)·PM2.5를 붙여 학습용 표 생성
 │  ├─ contact_sheet.py         수집 이미지를 한 장으로 붙여 보기
 │  ├─ make_prototype_data.py   조원에게 넘길 모델 출력 샘플 생성
 │  ├─ fetch_songui.py          에어코리아 PM2.5 조회
@@ -56,6 +57,7 @@ C:\26_2_AICapstone\
 ├─ data\                모든 생성물 (git 제외, 스크립트로 재생성 가능)
 │  ├─ images\              수집 이미지
 │  ├─ logs\                수집 로그·기상 CSV
+│  ├─ labels\              학습용 표(labels.csv)와 API 원본 응답 — rawirkorea\는 지우지 말 것
 │  ├─ contact_sheets\      이미지 확인용 모아보기
 │  ├─ screening\           화각 스크리닝 산출물
 │  └─ songui_pm25\         PM2.5 원본·정제·차트
@@ -96,6 +98,20 @@ python Tools\screen_fitic.py                전체 촬영 후 채점 (약 6분)
 python Tools\screen_fitic.py --rescore      저장된 프레임으로 재채점 (약 5초)
 python Tools\screen_fitic.py --ptz-check    화각이 돌아가는 카메라 찾기
 ```
+
+### `build_labels.py` — 학습용 표 만들기
+수집 로그(`capture_log.csv`)의 사진마다 **찍은 분의 기상값**(기상청 API허브 AWS 1분)과
+**찍은 시간의 PM2.5**(에어코리아 1시간값)를 붙여 `data\labels\labels.csv`를 만듭니다.
+사진 파일은 필요 없어 로그만 있으면 어디서든 돌릴 수 있습니다. 붙이는 규칙은 `docs/현황.md` §2·§6.
+
+```
+python Toolsuild_labels.py --log 경로\capture_log.csv
+python Toolsuild_labels.py --log 경로\capture_log.csv --check-weather 경로\weather.csv   실황과 대조까지
+```
+
+`.env`에 `KMA_HUB_KEY`(API허브)와 `AIRKOREA_API_KEY`가 필요합니다.
+받은 응답은 `data\labelsaw\`에 남아 다시 호출하지 않습니다.
+**PM2.5는 3개월이 지나면 다시 받을 수 없으므로 수집 기간 중 3개월 안에 한 번은 돌려야 합니다.**
 
 ### `contact_sheet.py` — 수집 이미지 확인
 여러 장을 격자로 붙여 한 장으로 만듭니다. 서버에 쌓인 이미지를 한 장씩 내려받지 않고 훑어볼 때 씁니다.
