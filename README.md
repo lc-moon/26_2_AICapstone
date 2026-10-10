@@ -51,6 +51,9 @@ C:\26_2_AICapstone\
 │
 ├─ Model\               로컬 학습 (RTX 3060 Ti). VM에는 올리지 않음
 │  ├─ features.py          사진마다 이미지 통계 계산 → data\model\features.csv
+│  ├─ view_check.py        화각 변경·깨진 화면 찾기 + 눈으로 검토하는 페이지 생성
+│  ├─ view_ref.csv         카메라마다 "평소 모습" 기준 사진 (한 번 정하면 고정)
+│  ├─ view_review.csv      사람이 검토한 결정 (사진 경로·제외/정상)
 │  ├─ baseline.py          거르기·날짜 분할·회귀·평가 → data\model\baseline_pred.csv
 │  └─ requirements.txt     학습용 패키지 (수집기용과 별도)
 │
@@ -147,12 +150,17 @@ VM에서 사진을 받는 절차는 `docs/운영.md` §3.
 ```
 pip install -r Model\requirements.txt
 python Model\features.py          사진마다 이미지 통계 계산 (이미 계산한 사진은 건너뜀, 1만 장에 약 40초)
+python Model\view_check.py        화각 변경·깨진 화면 찾기 (1만 장에 약 3분) → 검토할 후보가 있으면 data\review\view_review.html 생성
+python Model\view_check.py --apply 내려받기\view_review.csv    검토 페이지에서 저장한 결정 반영
 python Model\baseline.py          베이스라인 — 날짜 단위 교차검증 점수 + 사진별 예측값
 python Model\baseline.py --test   시험 A 점수. 모델을 다 고른 뒤에만 볼 것
 ```
 
 - 특징은 **사진 전체**와 **위쪽 1/3 띠**(대개 하늘·원경)에서 따로 잽니다. 밝기·대비·채도·암채널·선명도·파랑/빨강 비, 위−가운데 밝기차
-- 거르기: PM2.5 결측, 강수 감지, 습도 95% 이상
+- 거르기: PM2.5 결측, 강수 감지, 습도 95% 이상, 화각 변경·깨진 화면
+- **화각 검토**: `view_check.py`가 평소 모습과 비교해 화면이 10픽셀 넘게 옮겨 간 사진과 깨진 화면을 후보로 모읍니다.
+  검토 페이지(브라우저로 열기)에서 사진을 보고 제외·정상을 고른 뒤 저장한 CSV를 `--apply`로 반영합니다.
+  검토하지 않은 후보는 `baseline.py`가 기본 기준(20픽셀 초과·깨진 화면)으로 거릅니다
 - 시험 A는 **9/22부터 4일마다 하루**입니다. 규칙으로 정하므로 데이터가 늘어도 이미 정한 시험일은 그대로입니다
 - 성적표에는 평균만·카메라별 평균·기상만·이미지만·이미지+기상이 나란히 나오고, 이미지+기상은 카메라 차이를 다루는 방식 셋으로 각각 냅니다
 - 성적은 사진 단위와 **같은 카메라·같은 1시간 예측 평균** 단위로 내고, 늘 평균만 부르는 모델 대비 개선폭을 같이 봅니다
