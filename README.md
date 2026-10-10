@@ -44,6 +44,7 @@ C:\26_2_AICapstone\
 ├─ Tools\               1회성 스크립트
 │  ├─ screen_fitic.py          CCTV 화각 자동 스크리닝 (카메라 선정용)
 │  ├─ build_labels.py          사진마다 기상(1분)·PM2.5를 붙여 학습용 표 생성
+│  ├─ build_labels_beijing.py  베이징 외부 데이터를 같은 양식의 표로 (사진 회전·축소 포함)
 │  ├─ contact_sheet.py         수집 이미지를 한 장으로 붙여 보기
 │  ├─ make_prototype_data.py   조원에게 넘길 모델 출력 샘플 생성
 │  ├─ fetch_songui.py          에어코리아 PM2.5 조회
@@ -67,7 +68,7 @@ C:\26_2_AICapstone\
 ├─ data\                모든 생성물 (git 제외, 스크립트로 재생성 가능)
 │  ├─ images\              수집 이미지
 │  ├─ logs\                수집 로그·기상 CSV (vm\는 VM에서 받은 사본)
-│  ├─ labels\              학습용 표(labels.csv)와 API 원본 응답 — raw\airkorea\는 지우지 말 것
+│  ├─ labels\              학습용 표(labels.csv, 베이징은 labels_beijing.csv)와 API 원본 응답 — raw\airkorea\는 지우지 말 것
 │  ├─ contact_sheets\      이미지 확인용 모아보기
 │  ├─ model\               이미지 특징(features.csv)·베이스라인 사진별 예측(baseline_pred.csv)
 │  ├─ screening\           화각 스크리닝 산출물
@@ -123,6 +124,17 @@ python Tools\build_labels.py --log 경로\capture_log.csv --check-weather 경로
 `.env`에 `KMA_HUB_KEY`(API허브)와 `AIRKOREA_API_KEY`가 필요합니다.
 받은 응답은 `data\labels\raw\`에 남아 다시 호출하지 않습니다.
 **PM2.5는 3개월이 지나면 다시 받을 수 없으므로 수집 기간 중 3개월 안에 한 번은 돌려야 합니다.**
+
+### `build_labels_beijing.py` — 베이징 외부 데이터를 같은 양식으로
+베이징 데이터셋(Feng et al. 2021)을 `labels.csv`와 **같은 13칸**인 `data\labels\labels_beijing.csv`로 만듭니다.
+낮 사진만 쓰고, 사진은 똑바로 돌려 540×960으로 줄인 사본을 만듭니다. PM2.5는 엑셀의 한 시간 뒤 행,
+기온·습도·풍속·비는 베이징 관측소 54511의 30분 관측을 씁니다. 규칙과 근거는 `docs/현황.md` §5.
+
+```
+python Tools\build_labels_beijing.py      입력·출력 기본값은 C:\26_2_AICapstone_external\ (저장소 밖)
+```
+
+입력(`Photo_Beijing\`, `PhotoRGB_AQI_Met.xlsx`, `noaa_isd_54511_full.csv`)은 저장소 밖에 둡니다. 재배포하지 않는 조건으로 쓰는 자료입니다.
 
 ### `contact_sheet.py` — 수집 이미지 확인
 여러 장을 격자로 붙여 한 장으로 만듭니다. 서버에 쌓인 이미지를 한 장씩 내려받지 않고 훑어볼 때 씁니다.
