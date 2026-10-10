@@ -163,6 +163,7 @@ python Model\baseline.py --test   시험 A 점수. 모델을 다 고른 뒤에�
 ```
 UTIC_API_KEY=...          UTIC 오픈API (현재 수집에는 사용하지 않음)
 AIRKOREA_API_KEY=...      에어코리아 대기오염정보
+KMA_HUB_KEY=...           기상청 API허브 AWS 1분 자료 (build_labels.py)
 DISCORD_WEBHOOK_URL=...   수집 장애 알림 (선택)
 ```
 
