@@ -129,9 +129,23 @@ class Aws:
     def day(self, stn, day):
         """관측소 하루치 1분값 {분: {TA, HM, RE, WS1}}. -50 이하는 결측이라 None으로 둔다."""
         if (stn, day) not in self.days:
-            text = cached(RAW / "aws" / f"{stn}_{day:%Y%m%d}.txt", lambda: kma_text(
-                AWS_MIN, {"tm1": f"{day:%Y%m%d}0000", "tm2": f"{day:%Y%m%d}2359", "stn": stn,
-                          "disp": "0", "help": "0"}, self.key, f"AWS {stn} {day}"))
+            path = RAW / "aws" / f"{stn}_{day:%Y%m%d}.txt"
+            if path.exists():
+                text = path.read_text(encoding="utf-8")
+            else:
+                # 자료 대신 오류 문구만 오는 일이 있다. 끝 표시는 붙어 있어 kma_text를 통과하므로 여기서 거른다.
+                # 그대로 저장하면 다시 받지 않아 그날이 영구 결측이 된다 (2026-10-10 112번 10/1·10/2, 511번 10/2)
+                for wait in (5, 10, None):
+                    text = kma_text(AWS_MIN, {"tm1": f"{day:%Y%m%d}0000", "tm2": f"{day:%Y%m%d}2359",
+                                              "stn": stn, "disp": "0", "help": "0"}, self.key, f"AWS {stn} {day}")
+                    if any(line[:2] == "20" for line in text.splitlines()):
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_text(text, encoding="utf-8")
+                        break
+                    if wait is None:
+                        print(f"  AWS {stn} {day}: 자료 없음 — 저장하지 않고 결측으로 둔다")
+                    else:
+                        time.sleep(wait)
             rows = {}
             for line in text.splitlines():
                 if line[:2] == "20":
