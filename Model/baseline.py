@@ -1,6 +1,7 @@
 # 베이스라인 — 이미지 통계와 기상으로 PM2.5를 회귀해, "이미지에 PM2.5 신호가 있는가"를 확인한다.
 #
 #   python Model/baseline.py           개발 점수 (시험지 A를 뺀 날짜로 날짜 단위 교차검증)
+#   python Model/baseline.py --cv3     개발 점수를 CNN과 같은 날짜 3묶음으로 (CNN과 나란히 비교할 때)
 #   python Model/baseline.py --test    시험지 A 점수. 모델을 다 고른 뒤에만 볼 것
 #
 # 입력: data/labels/labels.csv (build_labels.py), data/model/features.csv (features.py),
@@ -37,6 +38,11 @@ IMAGE = ["all_bright", "all_contrast", "all_sat", "all_dark", "all_sharp", "all_
 
 def is_test_day(d):
     return (d - FIRST_DAY).days % 4 == 3
+
+
+def fold_of(d):
+    """연습시험 3묶음 번호 (CNN과 같은 묶음). 시험지 A가 나머지 3이라 개발 날짜는 0·1·2로 나뉜다"""
+    return (d - FIRST_DAY).days % 4
 
 
 def view_info(d):
@@ -142,6 +148,7 @@ def report(results):
 def main():
     ap = argparse.ArgumentParser(description="이미지 통계·기상 → PM2.5 베이스라인")
     ap.add_argument("--test", action="store_true", help="시험지 A로 평가 (모델을 다 고른 뒤에만)")
+    ap.add_argument("--cv3", action="store_true", help="하루씩 빼기 대신 CNN과 같은 날짜 3묶음으로 교차검증")
     args = ap.parse_args()
 
     d = load()
@@ -156,10 +163,11 @@ def main():
         report({name: scores(held, predict(dev, held, spec)) for name, spec in MODELS.items()})
         return
 
-    print("\n[개발] 하루씩 빼고 나머지로 학습 (날짜 단위 교차검증)")
+    group = dev["day"].map(fold_of) if args.cv3 else dev["day"]
+    print(f"\n[개발] {'날짜 3묶음 중 하나씩' if args.cv3 else '하루씩'} 빼고 나머지로 학습 (날짜 단위 교차검증)")
     preds = {name: np.zeros(len(dev)) for name in MODELS}
-    for day in sorted(dev["day"].unique()):
-        fold = dev["day"] == day
+    for g in sorted(group.unique()):
+        fold = group == g
         for name, spec in MODELS.items():
             preds[name][fold.values] = predict(dev[~fold], dev[fold], spec)
     report({name: scores(dev, p) for name, p in preds.items()})
@@ -168,8 +176,9 @@ def main():
     out = dev[["image", "camera_id", "scene", "captured_at", "pm_time", "pm25", "humidity", "sun_alt"]].copy()
     for name, p in preds.items():
         out[name] = p.round(2)
-    out.to_csv(PRED, index=False, encoding="utf-8-sig")
-    print(f"\n사진별 예측: {PRED}")
+    path = PRED.with_name(PRED.stem + "_cv3.csv") if args.cv3 else PRED
+    out.to_csv(path, index=False, encoding="utf-8-sig")
+    print(f"\n사진별 예측: {path}")
 
 
 if __name__ == "__main__":

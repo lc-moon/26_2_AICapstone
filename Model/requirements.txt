@@ -1,5 +1,7 @@
 # 로컬 학습용 패키지 (VM 수집기에는 필요 없다 — 수집기는 루트의 requirements.txt)
+# PyTorch는 GPU판을 먼저 따로 설치: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 numpy
 pandas
 opencv-python-headless   # 이미지 통계 계산
 scikit-learn             # 베이스라인 회귀·날짜 단위 교차검증
+timm                     # CNN 사전학습 모델 (ConvNeXt V2). 가중치는 처음 실행할 때 Hugging Face에서 받는다
