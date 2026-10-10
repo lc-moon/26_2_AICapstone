@@ -39,32 +39,34 @@ def is_test_day(d):
     return (d - FIRST_DAY).days % 4 == 3
 
 
-def bad_view(d):
-    """화각이 바뀌었거나 깨진 사진 (view_check.py). 사람이 검토한 결정을 따르고,
-    아직 검토하지 않은 후보는 기본 기준(20픽셀 초과·깨진 화면)으로 거른다."""
+def view_info(d):
+    """화각이 바뀌었거나 깨진 사진과 장면(카메라@해상도) (view_check.py).
+    사람이 검수한 사진은 그 결정을, 검수하지 않은 사진은 자동 판단(깨짐·화각 변경)을 따른다."""
     if not VIEW_CHECK.exists():
         sys.exit("data/model/view_check.csv가 없습니다. python Model/view_check.py 를 먼저 돌리세요")
-    v = d[["image"]].merge(pd.read_csv(VIEW_CHECK, encoding="utf-8-sig"), on="image", how="left")
+    v = d[["image", "captured_at"]].merge(pd.read_csv(VIEW_CHECK, encoding="utf-8-sig"), on="image", how="left")
     if v["shift"].isna().any():
         sys.exit(f"화각을 재지 않은 사진 {int(v['shift'].isna().sum())}장. python Model/view_check.py 를 먼저 돌리세요")
-    broken, candidate, default = flags(v)
+    broken, moved = flags(v)
     decided = v.image.map(load_review())
-    unreviewed = candidate & decided.isna()
+    unreviewed = (broken | moved) & decided.isna()
     if unreviewed.any():
-        print(f"  ※ 검토하지 않은 화각 후보 {int(unreviewed.sum())}장은 기본 기준으로 거릅니다 (view_check.py로 검토 가능)")
-    return (broken | (decided == "exclude") | (decided.isna() & default)).values
+        print(f"  ※ 검수하지 않은 화각 후보 {int(unreviewed.sum())}장은 자동 판단으로 거릅니다 (view_check.py로 검수 가능)")
+    bad = (decided == "exclude") | (decided.isna() & (broken | moved))
+    return bad.values, v.scene.values
 
 
 def load():
     d = pd.read_csv(LABELS, encoding="utf-8-sig", dtype={"camera_id": str})
     d = d.merge(pd.read_csv(FEATURES, encoding="utf-8-sig"), on="image")
     d["day"] = pd.to_datetime(d["captured_at"]).dt.date
+    bad, d["scene"] = view_info(d)
     n = len(d)
     steps = [("PM2.5 결측", d["pm25"].isna()),
              ("강수 감지", d["rain"] == 1),
              (f"습도 {HUMIDITY_MAX}% 이상", d["humidity"] >= HUMIDITY_MAX),
              ("기상 결측", d[WEATHER].isna().any(axis=1)),
-             ("화각 변경·깨짐", pd.Series(bad_view(d), index=d.index))]
+             ("화각 변경·깨짐", pd.Series(bad, index=d.index))]
     keep = pd.Series(True, index=d.index)
     print(f"사진 {n}장")
     for name, bad in steps:
@@ -76,7 +78,8 @@ def load():
 
 
 def design(train, rest, cols, mode):
-    """카메라마다 장면이 달라 특징 값의 크기를 카메라끼리 비교할 수 없다. 이를 다루는 방식 셋:
+    """카메라마다 장면이 달라 특징 값의 크기를 카메라끼리 비교할 수 없다. 단위는 장면(카메라@해상도) —
+    같은 카메라도 스트림 해상도가 바뀌면 화질 특성이 달라진다(10042번, 2026-10-08). 다루는 방식 셋:
       both  — 카메라마다 학습 구간의 평균·표준편차로 표준화 + 카메라 더미 (기본)
       camz  — 카메라별 표준화만. 카메라마다 평소 농도가 다르다는 정보는 빠진다
       dummy — 전체 평균·표준편차로 표준화 + 카메라 더미. 카메라마다 값이 출렁이는 폭은 맞추지 않는다
@@ -88,14 +91,15 @@ def design(train, rest, cols, mode):
         mu, sd = train[cols].mean(), train[cols].std().replace(0, 1)
         scale = lambda df: (df[cols] - mu) / sd
     else:
-        g = train.groupby("camera_id")[cols]
+        g = train.groupby("scene")[cols]
         mu, sd = g.mean(), g.std().replace(0, 1)
-        scale = lambda df: (df[cols] - mu.loc[df["camera_id"]].values) / sd.loc[df["camera_id"]].values
+        # 학습 구간에 없는 장면은 평균(0)으로 둔다
+        scale = lambda df: (df[cols] - mu.reindex(df["scene"]).values) / sd.reindex(df["scene"]).values
     out = []
     for df in (train, rest):
         x = scale(df).fillna(0).values
         if mode != "camz":
-            dummies = pd.get_dummies(df["camera_id"]).reindex(columns=sorted(train["camera_id"].unique()), fill_value=0)
+            dummies = pd.get_dummies(df["scene"]).reindex(columns=sorted(train["scene"].unique()), fill_value=0)
             x = np.hstack([x, dummies.values.astype(float)])
         out.append(x)
     return out
@@ -161,7 +165,7 @@ def main():
     report({name: scores(dev, p) for name, p in preds.items()})
 
     # 사진마다 정답과 모델별 예측. 어느 날·카메라·시간대에서 틀리는지 볼 때, 나중에 CNN과 같은 사진끼리 비교할 때 쓴다
-    out = dev[["image", "camera_id", "captured_at", "pm_time", "pm25", "humidity", "sun_alt"]].copy()
+    out = dev[["image", "camera_id", "scene", "captured_at", "pm_time", "pm25", "humidity", "sun_alt"]].copy()
     for name, p in preds.items():
         out[name] = p.round(2)
     out.to_csv(PRED, index=False, encoding="utf-8-sig")
