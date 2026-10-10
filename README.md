@@ -47,6 +47,11 @@ C:\26_2_AICapstone\
 │  ├─ fetch_songui.py          에어코리아 PM2.5 조회
 │  └─ analyze_songui.py        PM2.5 등급 분포 분석
 │
+├─ Model\               로컬 학습 (RTX 3060 Ti). VM에는 올리지 않음
+│  ├─ features.py          사진마다 이미지 통계 계산 → data\model\features.csv
+│  ├─ baseline.py          거르기·날짜 분할·회귀·평가 → data\model\baseline_pred.csv
+│  └─ requirements.txt     학습용 패키지 (수집기용과 별도)
+│
 ├─ deploy\              서버 설치 스크립트
 │  └─ install_service.sh   systemd 서비스 등록 (docs/운영.md 참고)
 │
@@ -56,9 +61,10 @@ C:\26_2_AICapstone\
 │
 ├─ data\                모든 생성물 (git 제외, 스크립트로 재생성 가능)
 │  ├─ images\              수집 이미지
-│  ├─ logs\                수집 로그·기상 CSV
-│  ├─ labels\              학습용 표(labels.csv)와 API 원본 응답 — rawirkorea\는 지우지 말 것
+│  ├─ logs\                수집 로그·기상 CSV (vm\는 VM에서 받은 사본)
+│  ├─ labels\              학습용 표(labels.csv)와 API 원본 응답 — raw\airkorea\는 지우지 말 것
 │  ├─ contact_sheets\      이미지 확인용 모아보기
+│  ├─ model\               이미지 특징(features.csv)·베이스라인 사진별 예측(baseline_pred.csv)
 │  ├─ screening\           화각 스크리닝 산출물
 │  └─ songui_pm25\         PM2.5 원본·정제·차트
 │
@@ -105,12 +111,12 @@ python Tools\screen_fitic.py --ptz-check    화각이 돌아가는 카메라 찾
 사진 파일은 필요 없어 로그만 있으면 어디서든 돌릴 수 있습니다. 붙이는 규칙은 `docs/현황.md` §2·§6.
 
 ```
-python Toolsuild_labels.py --log 경로\capture_log.csv
-python Toolsuild_labels.py --log 경로\capture_log.csv --check-weather 경로\weather.csv   실황과 대조까지
+python Tools\build_labels.py --log 경로\capture_log.csv
+python Tools\build_labels.py --log 경로\capture_log.csv --check-weather 경로\weather.csv   실황과 대조까지
 ```
 
 `.env`에 `KMA_HUB_KEY`(API허브)와 `AIRKOREA_API_KEY`가 필요합니다.
-받은 응답은 `data\labelsaw\`에 남아 다시 호출하지 않습니다.
+받은 응답은 `data\labels\raw\`에 남아 다시 호출하지 않습니다.
 **PM2.5는 3개월이 지나면 다시 받을 수 없으므로 수집 기간 중 3개월 안에 한 번은 돌려야 합니다.**
 
 ### `contact_sheet.py` — 수집 이미지 확인
@@ -128,6 +134,27 @@ python Tools\contact_sheet.py --date 2026-09-28 --camera 113    그 카메라의
 ### `fetch_songui.py` / `analyze_songui.py` — PM2.5 라벨 분석
 에어코리아에서 측정소 데이터를 받아 농도 등급 분포를 집계합니다.
 고농도 구간 데이터가 부족하다는 구조적 리스크(`docs/현황.md` §5)의 근거입니다.
+
+---
+
+## `Model\`: 모델 학습
+
+로컬 GPU에서 돌립니다. `data\labels\labels.csv`(build_labels 결과)와 `data\images\`가 있어야 합니다.
+VM에서 사진을 받는 절차는 `docs/운영.md` §3.
+
+```
+pip install -r Model\requirements.txt
+python Model\features.py          사진마다 이미지 통계 계산 (이미 계산한 사진은 건너뜀, 1만 장에 약 40초)
+python Model\baseline.py          베이스라인 — 날짜 단위 교차검증 점수 + 사진별 예측값
+python Model\baseline.py --test   시험 A 점수. 모델을 다 고른 뒤에만 볼 것
+```
+
+- 특징은 **사진 전체**와 **위쪽 1/3 띠**(대개 하늘·원경)에서 따로 잽니다. 밝기·대비·채도·암채널·선명도·파랑/빨강 비, 위−가운데 밝기차
+- 거르기: PM2.5 결측, 강수 감지, 습도 95% 이상
+- 시험 A는 **9/22부터 4일마다 하루**입니다. 규칙으로 정하므로 데이터가 늘어도 이미 정한 시험일은 그대로입니다
+- 성적표에는 평균만·카메라별 평균·기상만·이미지만·이미지+기상이 나란히 나오고, 이미지+기상은 카메라 차이를 다루는 방식 셋으로 각각 냅니다
+- 성적은 사진 단위와 **같은 카메라·같은 1시간 예측 평균** 단위로 내고, 늘 평균만 부르는 모델 대비 개선폭을 같이 봅니다
+- 사진별 정답·예측은 `data\model\baseline_pred.csv`에 남습니다. 어디서 틀리는지 볼 때 씁니다
 
 ---
 
