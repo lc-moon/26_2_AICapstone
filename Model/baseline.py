@@ -3,7 +3,8 @@
 #   python Model/baseline.py           개발 점수 (시험지 A를 뺀 날짜로 날짜 단위 교차검증)
 #   python Model/baseline.py --test    시험지 A 점수. 모델을 다 고른 뒤에만 볼 것
 #
-# 입력: data/labels/labels.csv (build_labels.py), data/model/features.csv (features.py)
+# 입력: data/labels/labels.csv (build_labels.py), data/model/features.csv (features.py),
+#       data/model/view_check.csv·Model/view_review.csv (view_check.py — 화각 변경·깨진 화면 거르기)
 # 결과: data/model/baseline_pred.csv — 개발 날짜 사진마다 정답과 모델별 예측 (교차검증에서 그 날을 뺀 모델의 예측)
 #
 # 평가 규칙 (docs/현황.md §7)
@@ -12,12 +13,15 @@
 #   - 평균만 찍는 모델 대비 개선폭을 같이 낸다
 #   - 사진 1장 단위와, 같은 카메라·같은 1시간 사진들의 예측 평균을 1시간 정답과 비교하는 단위를 둘 다 낸다
 import argparse
+import sys
 from datetime import date
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import Ridge
+
+from view_check import OUT as VIEW_CHECK, flags, load_review
 
 ROOT = Path(__file__).resolve().parent.parent
 LABELS = ROOT / "data/labels/labels.csv"
@@ -35,6 +39,22 @@ def is_test_day(d):
     return (d - FIRST_DAY).days % 4 == 3
 
 
+def bad_view(d):
+    """화각이 바뀌었거나 깨진 사진 (view_check.py). 사람이 검토한 결정을 따르고,
+    아직 검토하지 않은 후보는 기본 기준(20픽셀 초과·깨진 화면)으로 거른다."""
+    if not VIEW_CHECK.exists():
+        sys.exit("data/model/view_check.csv가 없습니다. python Model/view_check.py 를 먼저 돌리세요")
+    v = d[["image"]].merge(pd.read_csv(VIEW_CHECK, encoding="utf-8-sig"), on="image", how="left")
+    if v["shift"].isna().any():
+        sys.exit(f"화각을 재지 않은 사진 {int(v['shift'].isna().sum())}장. python Model/view_check.py 를 먼저 돌리세요")
+    broken, candidate, default = flags(v)
+    decided = v.image.map(load_review())
+    unreviewed = candidate & decided.isna()
+    if unreviewed.any():
+        print(f"  ※ 검토하지 않은 화각 후보 {int(unreviewed.sum())}장은 기본 기준으로 거릅니다 (view_check.py로 검토 가능)")
+    return (broken | (decided == "exclude") | (decided.isna() & default)).values
+
+
 def load():
     d = pd.read_csv(LABELS, encoding="utf-8-sig", dtype={"camera_id": str})
     d = d.merge(pd.read_csv(FEATURES, encoding="utf-8-sig"), on="image")
@@ -43,7 +63,8 @@ def load():
     steps = [("PM2.5 결측", d["pm25"].isna()),
              ("강수 감지", d["rain"] == 1),
              (f"습도 {HUMIDITY_MAX}% 이상", d["humidity"] >= HUMIDITY_MAX),
-             ("기상 결측", d[WEATHER].isna().any(axis=1))]
+             ("기상 결측", d[WEATHER].isna().any(axis=1)),
+             ("화각 변경·깨짐", pd.Series(bad_view(d), index=d.index))]
     keep = pd.Series(True, index=d.index)
     print(f"사진 {n}장")
     for name, bad in steps:
