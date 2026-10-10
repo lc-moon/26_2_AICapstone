@@ -67,7 +67,7 @@ C:\26_2_AICapstone\
 │  └─ values.json          시각별 추정 농도
 │
 ├─ data\                모든 생성물 (git 제외, 스크립트로 재생성 가능)
-│  ├─ images\              수집 이미지
+│  ├─ images\              수집 이미지 (bj\는 베이징 외부 데이터, 돌려서 줄인 사본)
 │  ├─ logs\                수집 로그·기상 CSV (vm\는 VM에서 받은 사본)
 │  ├─ labels\              학습용 표(labels.csv, 베이징은 labels_beijing.csv)와 API 원본 응답 — raw\airkorea\는 지우지 말 것
 │  ├─ contact_sheets\      이미지 확인용 모아보기
@@ -132,7 +132,7 @@ python Tools\build_labels.py --log 경로\capture_log.csv --check-weather 경로
 기온·습도·풍속·비는 베이징 관측소 54511의 30분 관측을 씁니다. 규칙과 근거는 `docs/현황.md` §5.
 
 ```
-python Tools\build_labels_beijing.py      입력·출력 기본값은 C:\26_2_AICapstone_external\ (저장소 밖)
+python Tools\build_labels_beijing.py      입력은 C:\26_2_AICapstone_external\beijing\ (저장소 밖), 돌린 사진은 data\images\bj\
 ```
 
 입력(`Photo_Beijing\`, `PhotoRGB_AQI_Met.xlsx`, `noaa_isd_54511_full.csv`)은 저장소 밖에 둡니다. 재배포하지 않는 조건으로 쓰는 자료입니다.

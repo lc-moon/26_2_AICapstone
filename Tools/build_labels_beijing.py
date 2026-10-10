@@ -9,9 +9,10 @@
 #   noaa_isd_54511_full.csv       관측소 54511 30분 관측 (NOAA ISD, UTC): 기온·이슬점·바람·현재 날씨 코드
 # 결과
 #   data/labels/labels_beijing.csv     인천 labels.csv와 같은 칸. image는 사진 폴더 기준 상대 경로
-#   {images}/bj/YYYY-MM-DD/HHMM.jpg    똑바로 돌려 540×960으로 줄인 사본 (JPEG 95)
+#   {images}/bj/YYYY-MM-DD/HHMM.jpg    똑바로 돌려 540×960으로 줄인 사본 (JPEG 95). 기본값은 인천과 같은 data/images
 #   {review}/YYYYMMDD_HHMM.jpg         눈으로 검토할 사본 (날짜 구분 없이 한 폴더)
-#   검토가 끝나 bj 폴더를 data/images/ 아래로 옮겨도 표는 그대로 맞는다
+#   처음에는 저장소 밖에 만들었다가 2026-10-11 검수가 끝나 data/images/bj로 옮겼다. 이미 있는 사진은 다시 만들지 않는다
+#   검수 결과는 view_check.py --import-folders {review} --camera bj 로 Model/view_review.csv에 넣는다
 #
 # 붙이는 규칙 (docs/현황.md §5, 2026-10-10 결정)
 #   낮만    태양고도 0° 초과. 좌표는 저자가 기상을 뽑은 奥体中心 39.98°N 116.40°E (카메라 위치는 추정)
@@ -104,7 +105,7 @@ def convert(args):
 def main():
     ap = argparse.ArgumentParser(description="베이징 데이터셋을 인천 labels.csv 양식으로")
     ap.add_argument("--src", default=str(EXT / "beijing"), help="Photo_Beijing·엑셀·ISD가 있는 폴더")
-    ap.add_argument("--images", default=str(EXT / "beijing" / "images"), help="돌린 사진을 둘 사진 폴더 (그 아래 bj/)")
+    ap.add_argument("--images", default=str(ROOT / "data/images"), help="돌린 사진을 둘 사진 폴더 (그 아래 bj/). 인천 사진과 같은 곳")
     ap.add_argument("--review", default=str(EXT / "beijing_review"), help="검토용 사본 폴더")
     ap.add_argument("--out", default=str(ROOT / "data/labels/labels_beijing.csv"))
     args = ap.parse_args()
