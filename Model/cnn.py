@@ -79,6 +79,7 @@ INPUTS = {             # 이름: 설명. full 말고는 모두 화면 위 글자
     "auto": "ROI ⑥ 자동 (먼지 민감도 지도, 연습시험 회차마다 공부 날짜로 만든 상자)",
 }
 SHORT = {"humidity": "hum", "temperature": "temp", "wind_speed": "wind", "sun_alt": "sun"}   # 결과 폴더 이름용
+HIDDEN = 64            # 기상 모델의 판단기 수 (WeatherNet)
 FILL = (104, 116, 124)  # 가린 자리를 칠할 색 (BGR). 사전학습 입력의 평균색이라 표준화하면 0 = "정보 없음"
 DEV = "cuda"
 MEAN = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1) * 255
@@ -191,23 +192,26 @@ def cache(d, kind):
 
 
 class WeatherNet(torch.nn.Module):
-    """사진 특징(768개) 옆에 기상 숫자를 붙여 마지막 판단(선형)에 함께 넣는다. 기상은 학습 사진의 평균·표준편차로 표준화"""
+    """사진 특징(768개) 옆에 기상 숫자를 붙여 판단기 64개 한 층을 거쳐 PM2.5를 낸다. 기상은 학습 사진의 평균·표준편차로 표준화.
+    한 층을 두는 이유(2026-10-11 결정): 1단계 모델은 같은 PM2.5에서도 습할수록 높게 불렀다(PM 0~10에서 건조 +0.8, 습도 80~95% +3.9).
+    필요한 보정이 농도·화면 모양에 따라 달라서, 사진 특징에 기상을 더하기만 하면("습하면 늘 일정량 빼기") 다 표현되지 않는다.
+    판단기 층이 있으면 "흐린데 습하면 많이 빼고, 누렇게 탁하면 덜 뺀다"처럼 둘을 섞어 판단할 수 있다"""
 
     def __init__(self, n, pretrained):
         super().__init__()
         self.body = timm.create_model(NAME, pretrained=pretrained, num_classes=0, drop_path_rate=DROP_PATH)
-        self.fc = torch.nn.Linear(self.body.num_features + n, 1)
+        self.head = torch.nn.Sequential(torch.nn.Linear(self.body.num_features + n, HIDDEN), torch.nn.GELU(), torch.nn.Linear(HIDDEN, 1))
         self.register_buffer("mu", torch.zeros(n))
         self.register_buffer("sd", torch.ones(n))
 
     def forward(self, x, w):
-        return self.fc(torch.cat([self.body(x), (w - self.mu) / self.sd], 1))
+        return self.head(torch.cat([self.body(x), (w - self.mu) / self.sd], 1))
 
 
 def make_model(bias=0.0, pretrained=True, n_weather=0):
     if n_weather:
         m = WeatherNet(n_weather, pretrained)
-        torch.nn.init.constant_(m.fc.bias, bias)
+        torch.nn.init.constant_(m.head[-1].bias, bias)
     else:
         m = timm.create_model(NAME, pretrained=pretrained, num_classes=1, drop_path_rate=DROP_PATH)
         torch.nn.init.constant_(m.head.fc.bias, bias)       # 처음부터 평균 근처를 부르게
