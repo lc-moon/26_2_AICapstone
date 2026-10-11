@@ -64,6 +64,8 @@ C:\26_2_AICapstone\
 │  ├─ roi.py               ROI 상자 그리기 페이지 생성·결과 반영, 후보 5개(하늘·먼 건물·둘 다·위 1/3·위 60%)의 상자
 │  ├─ roi_page.html        상자 그리기 페이지 틀 (roi.py가 사진 목록을 넣어 data\review\roi.html로 만든다)
 │  ├─ roi.csv              카메라마다 하늘·먼 건물 상자 (비율 좌표, 10/11 확정 — Claude 초안을 사용자가 검토·수정)
+│  ├─ roi_auto.py          ROI ⑥ 자동 — 먼지 민감도 지도로 카메라마다 탁할수록 가장 흐려지는 곳에 상자 → roi_auto.csv
+│  ├─ roi_auto.csv         자동 상자 (연습시험 회차 0·1·2는 그 회차 공부 날짜로만, all은 개발 날짜 전체로 만든 것)
 │  ├─ screen.py            CNN 입력 후보 예선 — 사전학습 특징 + Ridge로 후보당 1~2분에 채점
 │  └─ requirements.txt     학습용 패키지 (수집기용과 별도)
 │
@@ -186,7 +188,8 @@ python Model\run_queue.py "--version incheon_log" "--version mixed"   여러 개
 python Model\text_mask.py               글자 자리 다시 찾기 (새 카메라·해상도가 생겼을 때) → data\review\text_mask_*.jpg로 확인
 python Model\roi.py                     ROI 상자 그리기 페이지 → data\review\roi.html (브라우저로 열어 그린 뒤 [저장])
 python Model\roi.py --apply 내려받기\roi.csv   그린 상자를 Model\roi.csv로 반영
-python Model\screen.py                  입력 후보(ROI 5개·사진 전체·글자 가림) 예선 → data\model\screen.csv (cnn.py 학습과 동시에 돌리지 말 것)
+python Model\roi_auto.py                자동 상자 계산 → data\review\roi_auto_*.jpg로 지도 확인 (몇 분, CPU)
+python Model\screen.py                  입력 후보(ROI 6개·사진 전체·글자 가림) 예선 → data\model\screen.csv (cnn.py 학습과 동시에 돌리지 말 것)
 ```
 
 **CNN을 돌리는 동안에는 게임 등 GPU를 쓰는 프로그램을 끕니다.** 같이 쓰면 속도가 몇 분의 1로 떨어지고,

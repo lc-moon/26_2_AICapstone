@@ -46,7 +46,7 @@ from timm.layers.grn import GlobalResponseNorm
 
 import text_mask
 from baseline import HUMIDITY_MAX, LABELS, WEATHER, fold_of, is_test_day, scores, view_info
-from roi import FULL, box as roi_box, load_roi
+from roi import FULL, box as roi_box, load_auto, load_roi
 from view_check import load_review
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -75,6 +75,7 @@ INPUTS = {             # 이름: 설명. full 말고는 모두 화면 위 글자
     "masked": "사진 전체 + 글자 가림",
     "sky": "ROI ① 하늘", "far": "ROI ② 먼 건물·산", "both": "ROI ③ 하늘+먼 건물·산",
     "top3": "ROI ④ 위쪽 1/3", "top60": "ROI ⑤ 위쪽 60%",
+    "auto": "ROI ⑥ 자동 (먼지 민감도 지도, 연습시험 회차마다 공부 날짜로 만든 상자)",
 }
 FILL = (104, 116, 124)  # 가린 자리를 칠할 색 (BGR). 사전학습 입력의 평균색이라 표준화하면 0 = "정보 없음"
 DEV = "cuda"
@@ -153,19 +154,26 @@ def _resized(job):
 
 def cache(d, kind):
     """사진을 입력 종류대로 가리고 잘라 384×384로 줄여 한 파일(uint8, 장×세로×가로×RGB)에 모은다. 매 바퀴 원본을 다시 줄이지 않게.
-    사진 목록이 바뀌면 다시 만든다(1.6만 장에 1분 남짓). 목록 파일은 다 만든 뒤에 써서, 중간에 끊기면 다음에 다시 만든다"""
+    사진 목록이나 상자가 바뀌면 다시 만든다(1.6만 장에 1분 남짓). 목록 파일은 다 만든 뒤에 써서, 중간에 끊기면 다음에 다시 만든다.
+    kind가 auto0·auto1·auto2·autoall이면 ⑥ 자동 상자의 그 회차 상자를 쓴다"""
     images = d.image.tolist()
-    arr, idx = CACHE / f"{kind}_{SIZE}.npy", CACHE / f"{kind}_{SIZE}.csv"
-    if arr.exists() and idx.exists() and pd.read_csv(idx).image.tolist() == images:
-        return np.load(arr, mmap_mode="r")
     if kind in ("full", "masked"):
         boxes = [FULL] * len(d)
+    elif kind.startswith("auto"):
+        auto, fold = load_auto(), kind[4:]
+        boxes = [auto[(c, fold)] for c in d.camera_id]
     else:
         rois = load_roi()
         missing = sorted(set(d.camera_id) - set(rois)) if kind in ("sky", "far", "both") else []
         if missing:
             sys.exit(f"ROI 상자가 없는 카메라: {missing}. python Model/roi.py 로 그린 뒤 --apply 하세요")
         boxes = [roi_box(rois, c, kind) for c in d.camera_id]
+    table = pd.DataFrame({"image": images, "box": [",".join(f"{v:.3f}" for v in b) for b in boxes]})
+    arr, idx = CACHE / f"{kind}_{SIZE}.npy", CACHE / f"{kind}_{SIZE}.csv"
+    if arr.exists() and idx.exists():
+        old = pd.read_csv(idx, dtype=str)
+        if old.image.tolist() == images and ("box" not in old or old.box.tolist() == table.box.tolist()):
+            return np.load(arr, mmap_mode="r")
     jobs = [(IMAGES / p, s, kind != "full", b) for p, s, b in zip(images, d.scene, boxes)]
     print(f"사진 {len(images)}장을 입력 '{kind}'로 만드는 중 → {arr}")
     CACHE.mkdir(parents=True, exist_ok=True)
@@ -176,7 +184,7 @@ def cache(d, kind):
             out[i] = img
     out.flush()
     del out
-    pd.DataFrame({"image": images}).to_csv(idx, index=False)
+    table.to_csv(idx, index=False)
     return np.load(arr, mmap_mode="r")
 
 
@@ -260,7 +268,15 @@ def pick_epoch(table, use_bj):
     return int(ok["베이징MAE"].idxmin())
 
 
-def run(d, arr, version, kind):
+def inputs(d, kind):
+    """회차("0"·"1"·"2"·"all") → 사진 사본. ⑥ 자동은 회차마다 상자가 달라 사본도 따로, 나머지는 하나를 같이 쓴다"""
+    if kind == "auto":
+        return {f: cache(d, f"auto{f}") for f in ("0", "1", "2", "all")}
+    arr = cache(d, kind)
+    return {f: arr for f in ("0", "1", "2", "all")}
+
+
+def run(d, arrs, version, kind):
     use_bj, log = VERSIONS[version]
     out = OUT / f"{version}_{kind}"
     out.mkdir(parents=True, exist_ok=True)
@@ -274,7 +290,7 @@ def run(d, arr, version, kind):
     for f in ("0", "1", "2"):
         val = ev.part.isin([f"f{f}", f"b{f}"]).values
         learn = ev[~val & ((ev.city == "inc") | use_bj).values]
-        _, preds = train(arr, d, learn.index.values, log, f"묶음 {f}", eval_rows=ev.index[val].values)
+        _, preds = train(arrs[f], d, learn.index.values, log, f"묶음 {f}", eval_rows=ev.index[val].values)
         P[:, val] = np.array(preds)
     ev = ev.reset_index(drop=True)
     is_inc = (ev.city == "inc").values
@@ -295,7 +311,7 @@ def run(d, arr, version, kind):
 
     learn = pd.concat([inc, bj]) if use_bj else inc
     print(f"\n[최종 모델] 인천 개발 {inc.day.nunique()}일{f' + 베이징 학습 {bj.day.nunique()}일' if use_bj else ''}로 {best}바퀴")
-    model, _ = train(arr, d, learn.index.values, log, "최종", stop=best)
+    model, _ = train(arrs["all"], d, learn.index.values, log, "최종", stop=best)
     torch.save(model.state_dict(), out / "model.pt")
     info = {"version": version, "input": kind, "model": NAME, "beijing_train": use_bj, "log_target": log, "best_epoch": best,
             "cv": table.loc[best].round(3).to_dict(), "train_photos": int(len(learn)),
@@ -312,7 +328,7 @@ def test(d):
     rows, preds = {}, []
     for r in runs:
         info = json.loads((r / "info.json").read_text(encoding="utf-8"))
-        arr = cache(d, info["input"])
+        arr = inputs(d, info["input"])["all"]
         model = make_model(pretrained=False)
         model.load_state_dict(torch.load(r / "model.pt", map_location=DEV))
         for sheet in ("A", "B"):
@@ -346,7 +362,7 @@ def main():
         test(d)
     else:
         print(f"입력: {args.input} — {INPUTS[args.input]}")
-        run(d, cache(d, args.input), args.version, args.input)
+        run(d, inputs(d, args.input), args.version, args.input)
 
 
 if __name__ == "__main__":

@@ -29,6 +29,7 @@ CAMERAS = ROOT / "model_output/cameras.json"
 TEMPLATE = Path(__file__).with_name("roi_page.html")
 PAGE = ROOT / "data/review/roi.html"
 ROI = Path(__file__).with_name("roi.csv")
+AUTO = Path(__file__).with_name("roi_auto.csv")     # ⑥ 자동 상자 (roi_auto.py). 연습시험 회차(0·1·2)와 최종(all)마다 다르다
 CANDIDATES = ["sky", "far", "both", "top3", "top60"]
 FULL = (0.0, 0.0, 1.0, 1.0)
 
@@ -41,6 +42,12 @@ def load_roi():
     for r in pd.read_csv(ROI, dtype={"camera": str}).itertuples():
         out.setdefault(r.camera, {})[r.kind] = None if r.x0 == "none" else tuple(float(v) for v in (r.x0, r.y0, r.x1, r.y1))
     return out
+
+
+def load_auto():
+    """Model/roi_auto.csv → {(카메라, 회차): (x0,y0,x1,y1)}. 회차는 "0"·"1"·"2"·"all" """
+    t = pd.read_csv(AUTO, dtype={"camera": str, "fold": str})
+    return {(r.camera, r.fold): (r.x0, r.y0, r.x1, r.y1) for r in t.itertuples()}
 
 
 def box(roi, camera, candidate):

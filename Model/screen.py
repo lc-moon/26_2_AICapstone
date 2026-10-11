@@ -1,6 +1,6 @@
 # CNN 후보 거르기(예선) — 사전학습 ConvNeXt V2가 사진에서 뽑은 특징(768개)에 Ridge 회귀를 얹어 입력 후보를 빠르게 비교한다.
 #
-#   python Model/screen.py                         ROI 후보 5개 + 비교용(사진 전체·글자 가림)을 두 버전으로
+#   python Model/screen.py                         ROI 후보 6개(⑥ 자동 포함) + 비교용(사진 전체·글자 가림)을 두 버전으로
 #   python Model/screen.py --inputs masked sky     고른 입력만
 #
 # 미세조정(cnn.py, 후보당 1~2시간) 대신 사전학습 모델을 그대로 두고 특징만 뽑아(후보당 1~2분) 같은 연습시험 3묶음으로 채점한다.
@@ -49,6 +49,7 @@ def features(d, kind):
 
 
 def evaluate(d, f, version):
+    """f: 특징 (사진 × 768). ⑥ 자동처럼 회차마다 입력이 다르면 {회차: 특징}"""
     use_bj, log = cnn.VERSIONS[version]
     inc = d[(d.city == "inc") & (d.part != "A")]
     bj = d[(d.city == "bj") & (d.part != "B")]
@@ -56,11 +57,12 @@ def evaluate(d, f, version):
     y = d.pm25.values
     pred = pd.Series(np.nan, index=ev.index)
     for k in ("0", "1", "2"):
+        F = f[k] if isinstance(f, dict) else f
         val = ev.part.isin([f"f{k}", f"b{k}"])
         learn = ev[~val & ((ev.city == "inc") | use_bj)]
         t = np.log1p(y[learn.index]) if log else y[learn.index]
-        reg = make_pipeline(StandardScaler(), RidgeCV(alphas=ALPHAS)).fit(f[learn.index], t)
-        p = reg.predict(f[ev.index[val]])
+        reg = make_pipeline(StandardScaler(), RidgeCV(alphas=ALPHAS)).fit(F[learn.index], t)
+        p = reg.predict(F[ev.index[val]])
         pred[ev.index[val]] = np.expm1(p) if log else p
     is_inc = (ev.city == "inc").values
     s = scores(ev[is_inc].reset_index(drop=True), pred.values[is_inc])
@@ -77,7 +79,7 @@ def main():
     d = cnn.load()
     rows = []
     for kind in args.inputs:
-        f = features(d, kind)
+        f = {k: features(d, f"auto{k}") for k in ("0", "1", "2")} if kind == "auto" else features(d, kind)
         for v in args.versions:
             r = evaluate(d, f, v)
             rows.append({"입력": kind, "설명": cnn.INPUTS[kind], "버전": v, **{k: round(x, 3) for k, x in r.items()}})
