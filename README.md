@@ -59,6 +59,10 @@ C:\26_2_AICapstone\
 │  ├─ baseline.py          거르기·날짜 분할·회귀·평가 → data\model\baseline_pred.csv
 │  ├─ cnn.py               ConvNeXt V2-Tiny 미세조정 (인천 ver / 인천 log ver / 인천+베이징 ver) → data\model\cnn\
 │  ├─ run_queue.py         cnn.py 여러 개를 이어서 실행 (실패해도 다음 진행, 절전 방지, 기록 파일)
+│  ├─ text_mask.py         화면 위 글자(시각·지명) 자리 찾기 → text_mask\ (CNN 입력에서 평균색으로 가림)
+│  ├─ text_mask\           장면마다 글자 자리 (한 번 만들고 눈으로 확인한 것)
+│  ├─ roi.py               ROI 상자 그리기 페이지 생성·결과 반영, 후보 5개(하늘·먼 건물·둘 다·위 1/3·위 60%)의 상자
+│  ├─ roi_page.html        상자 그리기 페이지 틀 (roi.py가 사진 목록을 넣어 data\review\roi.html로 만든다)
 │  └─ requirements.txt     학습용 패키지 (수집기용과 별도)
 │
 ├─ deploy\              서버 설치 스크립트
@@ -177,6 +181,9 @@ python Model\cnn.py --version incheon_log   CNN 인천 ver을 로그로 학습 (
 python Model\cnn.py --version mixed     CNN 인천+베이징 ver — 베이징 학습 날짜를 섞는다
 python Model\cnn.py --test              저장된 CNN 전부를 시험지 A(인천)·B(베이징)로 채점. 모든 작업이 끝난 뒤 한 번만
 python Model\run_queue.py "--version incheon_log" "--version mixed"   여러 개를 이어서 (기록: data\model\cnn\run_log.txt)
+python Model\text_mask.py               글자 자리 다시 찾기 (새 카메라·해상도가 생겼을 때) → data\review\text_mask_*.jpg로 확인
+python Model\roi.py                     ROI 상자 그리기 페이지 → data\review\roi.html (브라우저로 열어 그린 뒤 [저장])
+python Model\roi.py --apply 내려받기\roi.csv   그린 상자를 Model\roi.csv로 반영
 ```
 
 **CNN을 돌리는 동안에는 게임 등 GPU를 쓰는 프로그램을 끕니다.** 같이 쓰면 속도가 몇 분의 1로 떨어지고,
@@ -192,7 +199,7 @@ GPU 메모리가 넘치면 Windows가 PC 메모리를 빌려 쓰며 수십 배 �
 - 성적표에는 평균만·카메라별 평균·기상만·이미지만·이미지+기상이 나란히 나오고, 이미지+기상은 카메라 차이를 다루는 방식 셋으로 각각 냅니다
 - 성적은 사진 단위와 **같은 카메라·같은 1시간 예측 평균** 단위로 내고, 늘 평균만 부르는 모델 대비 개선폭을 같이 봅니다
 - 사진별 정답·예측은 `data\model\baseline_pred.csv`에 남습니다. 어디서 틀리는지 볼 때 씁니다
-- **CNN**은 사진 전체를 384×384로 맞춰 넣고, 카메라·도시 정보는 주지 않습니다. 증강은 살짝 잘라내기·좌우 뒤집기만(색·밝기는 정답 신호라 금지).
+- **CNN**은 사진 전체(또는 ROI 상자)를 384×384로 맞춰 넣고, 카메라·도시 정보는 주지 않습니다. 화면 위 글자(시각·지명)는 평균색으로 가립니다(`--input`, 기본 masked). 증강은 살짝 잘라내기·좌우 뒤집기만(색·밝기는 정답 신호라 금지).
   인천+베이징 ver은 log(1+PM2.5)를 배웁니다. 시험지 B는 베이징 첫날(2019-05-19)부터 4일마다 하루로, 어느 버전도 학습에 쓰지 않습니다.
   연습시험은 인천·베이징을 각각 3묶음으로 나눠 같은 번호끼리 함께 빼고, 두 도시 점수를 모두 기록합니다.
   바퀴 수는 인천 ver은 인천 점수로, 인천+베이징 ver은 "인천이 최고와 0.1 이내인 바퀴 중 베이징이 가장 좋은 바퀴"로 고릅니다.

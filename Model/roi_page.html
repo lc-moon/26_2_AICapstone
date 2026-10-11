@@ -1,0 +1,165 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ROI 상자 그리기</title>
+<style>
+:root{--bg:#fafafa;--fg:#222;--sub:#666;--card:#fff;--line:#ddd;--sky:#1e88e5;--far:#f57c00;--ok:#2a7;--warn:#d33}
+@media (prefers-color-scheme:dark){:root{--bg:#1b1b1b;--fg:#eee;--sub:#aaa;--card:#262626;--line:#444}}
+body{font-family:system-ui,'Malgun Gothic',sans-serif;background:var(--bg);color:var(--fg);margin:16px;line-height:1.6}
+h1{font-size:22px;margin:0 0 8px} h2{font-size:17px;margin:18px 0 6px}
+.guide{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 16px;max-width:1000px}
+table{border-collapse:collapse;margin:6px 0;font-size:14px} td,th{border:1px solid var(--line);padding:4px 8px;text-align:left;vertical-align:top}
+.guide li{margin:3px 0;font-size:14px}
+.bar{position:sticky;top:0;background:var(--bg);padding:8px 0;border-bottom:1px solid var(--line);z-index:5;display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:12px}
+button{font-size:14px;padding:5px 10px;cursor:pointer;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg)}
+button.on{outline:3px solid var(--fg)} button.sky{border-color:var(--sky);color:var(--sky)} button.far{border-color:var(--far);color:var(--far)}
+button.none.on{background:var(--fg);color:var(--bg)}
+.cam{margin:18px 0;padding:12px;background:var(--card);border:1px solid var(--line);border-radius:8px;max-width:1000px}
+.cam h3{font-size:16px;margin:0 0 6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.cam .done{color:var(--ok);font-size:13px} .cam .todo{color:var(--warn);font-size:13px}
+.tools{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}
+.wrap{position:relative;display:inline-block;max-width:100%;touch-action:none}
+.wrap img{display:block;max-width:100%;max-height:75vh;user-select:none;-webkit-user-drag:none}
+.wrap canvas{position:absolute;left:0;top:0;width:100%;height:100%;cursor:crosshair}
+.msg{font-size:13px;color:var(--sub);min-height:1.4em} .msg .w{color:var(--warn)}
+.key{display:inline-block;width:12px;height:12px;border-radius:2px;vertical-align:middle;margin-right:3px}
+</style></head><body>
+<h1>ROI 상자 그리기</h1>
+<div class="guide">
+<b>무엇을 하나</b> — 카메라마다 <b style="color:var(--sky)">하늘 상자</b> 1개와 <b style="color:var(--far)">먼 건물·산 상자</b> 1개를 그립니다.
+CNN이 사진 전체 대신 이 부분만 보고 PM2.5를 맞히게 해서, 어느 부분을 볼 때 가장 잘 맞히는지 비교합니다(2026-10-11 결정).
+<h2>후보 5개</h2>
+<table>
+<tr><th>후보</th><th>보는 곳</th><th>만드는 법</th><th>먼지가 보이는 방식</th></tr>
+<tr><td><span class="key" style="background:var(--sky)"></span>① 하늘</td><td>건물 위 하늘</td><td>직접 그림</td><td>먼지가 많으면 파란 하늘이 희뿌옇고 누렇게 바뀜. 구름·해 위치에 흔들림</td></tr>
+<tr><td><span class="key" style="background:var(--far)"></span>② 먼 건물·산</td><td>가장 멀리 보이는 건물·산</td><td>직접 그림</td><td>멀수록 먼지층을 많이 통과해 윤곽·대비가 흐려짐. 물리적으로 가장 확실한 신호</td></tr>
+<tr><td>③ 하늘+먼 건물·산</td><td>①②를 감싸는 상자 (흰 점선)</td><td>자동</td><td>건물 실루엣과 하늘 경계가 얼마나 또렷한지</td></tr>
+<tr><td>④ 위쪽 1/3</td><td>모든 카메라 같은 비율 (회색 점선 위)</td><td>자동</td><td>베이스라인에서 이 띠만 써도 사진 전체와 성적이 같았음</td></tr>
+<tr><td>⑤ 위쪽 60%</td><td>아래 도로를 잘라냄 (회색 점선 위)</td><td>자동</td><td>차·사람 같은 잡음만 뺐을 때의 효과</td></tr>
+</table>
+비교 기준인 "사진 전체"는 이미 학습했습니다. 후보 5개는 먼저 빠르게 걸러 보고(후보당 1~2분), 좋은 2~3개만 실제로 학습합니다.
+<h2>그릴 때 유의사항</h2>
+<ul>
+<li><b>그리는 법</b>: [하늘 그리기] 또는 [먼 건물·산 그리기]를 누르고 사진 위에서 끌어서 상자를 만듭니다. 다시 끌면 새로 그려집니다</li>
+<li><b>없으면 [없음]</b>: 하늘이나 먼 건물·산이 안 보이는 카메라는 [없음]을 누릅니다. 그 후보에서는 그 카메라만 <b>사진 전체</b>를 씁니다
+(카메라를 빼면 후보마다 채점 사진이 달라져 공정하게 비교할 수 없어서)</li>
+<li><b>Claude 초안</b>: 21대 모두 Claude가 맑은 날·탁한 날을 비교해 그린 초안이 미리 들어 있습니다. 보면서 고치시면 됩니다.
+이 브라우저에서 이미 직접 그린 상자는 그대로 두고 초안으로 덮지 않습니다</li>
+<li><b>하늘은 먼 건물·산 상자 가까이에</b>: ③은 두 상자를 감싸는 상자라, 하늘이 멀리 떨어져 있으면 ③이 위쪽 전체를 덮는 큰 상자가 되어 ④(위쪽 1/3)와 차이가 없어집니다</li>
+<li><b>상자 모양</b>: 너무 가늘고 길게 그리지 마세요. 상자는 384×384 정사각형으로 늘리거나 줄여 넣으므로 가로:세로가 <b>3:1을 넘으면</b> 많이 찌그러집니다(넘으면 아래에 경고가 뜹니다).
+하늘이 위쪽에 얇게만 보이는 카메라는 3:1을 조금 넘어도 괜찮습니다(하늘은 무늬가 적어 찌그러져도 잃는 게 적음)</li>
+<li><b>크기보다 위치가 우선</b>: 작은 상자를 384로 키우면 흐릿해 보이지만 원래 픽셀의 정보가 사라지지는 않습니다. 탁할 때 사라지는 먼 물체가 작게만 보이면 작아도 그 자리를 잡으세요. 가능하면 주변 먼 건물·하늘을 조금 넣어 넓히는 게 좋습니다</li>
+<li><b>화면 위 글자(지명·시각 표시)는 자동으로 가립니다</b>: 학습할 때 평균색으로 칠해 넣으므로 상자에 걸쳐도 됩니다. 다만 가린 자리는 정보가 없으니 상자 대부분이 글자가 되지는 않게 하세요</li>
+<li><b>가까운 나무는 피하세요</b>: 계절에 따라 잎이 바뀌어 모델이 "나무가 앙상하면 탁하다" 같은 엉뚱한 걸 외울 수 있습니다(특히 베이징 겨울)</li>
+<li><b>차·사람이 지나가는 곳은 피하세요</b>: 먼지와 상관없이 매번 달라집니다</li>
+<li><b>먼 건물·산 상자</b>에는 하늘이 조금 섞여도 괜찮습니다. 경계가 보이는 편이 오히려 좋습니다</li>
+<li><b>[탁한 날]</b>로 바꿔 보면 먼지가 많을 때 어디가 흐려지는지 보입니다. 맑은 날에만 보이고 탁한 날 사라지는 먼 건물이 좋은 후보입니다</li>
+<li><b>10042번</b>은 10/8에 해상도만 바뀌고 화각은 같아서 한 번만 그립니다(좌표는 비율로 저장해 두 해상도에 같이 씁니다)</li>
+<li>작업은 이 브라우저에 자동 보관되지만, 끝나면 꼭 <b>[저장]</b>을 눌러 CSV를 내려받으세요. 그 파일을 Claude에게 알려 주면 반영합니다</li>
+</ul>
+</div>
+<div class="bar"><button onclick="save()">저장 (roi.csv 내려받기)</button><span id="count"></span></div>
+<div id="root"></div>
+<script>
+const CAMS = __CAMS__;
+const SAVED = __SAVED__;
+const KEY = 'roi_boxes_v1';
+let S = {};
+try { S = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (e) { S = {}; }
+// 이 브라우저에서 직접 그린 상자가 먼저, 없으면 Model/roi.csv(초안 또는 반영한 결과)의 상자
+for (const [cam, v] of Object.entries(SAVED)) {
+  S[cam] = S[cam] || {};
+  for (const k of ['sky', 'far']) if (S[cam][k] === undefined && v[k] !== undefined) S[cam][k] = v[k];
+}
+function keep() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
+const COLORS = {sky: getComputedStyle(document.documentElement).getPropertyValue('--sky').trim(),
+                far: getComputedStyle(document.documentElement).getPropertyValue('--far').trim()};
+const NAMES = {sky: '하늘', far: '먼 건물·산'};
+
+function done(cam) { const s = S[cam] || {}; return ['sky', 'far'].every(k => s[k]); }
+function upd() { document.getElementById('count').textContent = `${CAMS.length}개 중 ${CAMS.filter(c => done(c.cam)).length}개 완료`; }
+
+for (const c of CAMS) {
+  S[c.cam] = S[c.cam] || {};
+  const st = S[c.cam];
+  const sec = document.createElement('div'); sec.className = 'cam';
+  sec.innerHTML = `<h3>${c.cam} ${c.name} <span class="state"></span></h3>
+    <div class="tools">
+      <button data-img="clear" class="on">맑은 날 (PM2.5 ${c.clear_pm})</button><button data-img="hazy">탁한 날 (PM2.5 ${c.hazy_pm})</button>
+      <span style="width:12px"></span>
+      <button class="sky" data-mode="sky">하늘 그리기</button><button class="none" data-none="sky">하늘 없음</button>
+      <button class="far" data-mode="far">먼 건물·산 그리기</button><button class="none" data-none="far">먼 건물·산 없음</button>
+    </div>
+    <div class="wrap"><img src="../images/${c.clear}"><canvas></canvas></div>
+    <div class="msg"></div>`;
+  const img = sec.querySelector('img'), cv = sec.querySelector('canvas'), msg = sec.querySelector('.msg'), state = sec.querySelector('.state');
+  let mode = null, drag = null;
+  const btn = q => sec.querySelector(q);
+
+  function draw() {
+    const W = cv.width = cv.clientWidth * devicePixelRatio, H = cv.height = cv.clientHeight * devicePixelRatio;
+    const g = cv.getContext('2d'); g.clearRect(0, 0, W, H);
+    g.setLineDash([6, 6]); g.lineWidth = 1.5 * devicePixelRatio; g.strokeStyle = 'rgba(160,160,160,.9)';
+    for (const f of [1 / 3, 0.6]) { g.beginPath(); g.moveTo(0, f * H); g.lineTo(W, f * H); g.stroke(); }
+    const boxes = ['sky', 'far'].map(k => (drag && drag.k === k) ? drag.b : st[k]).filter(b => b && b !== 'none');
+    if (boxes.length === 2) {
+      const u = [Math.min(boxes[0][0], boxes[1][0]), Math.min(boxes[0][1], boxes[1][1]), Math.max(boxes[0][2], boxes[1][2]), Math.max(boxes[0][3], boxes[1][3])];
+      g.strokeStyle = '#fff'; g.strokeRect(u[0] * W, u[1] * H, (u[2] - u[0]) * W, (u[3] - u[1]) * H);
+    }
+    g.setLineDash([]); g.lineWidth = 3 * devicePixelRatio;
+    for (const k of ['sky', 'far']) {
+      const b = (drag && drag.k === k) ? drag.b : st[k];
+      if (!b || b === 'none') continue;
+      g.strokeStyle = COLORS[k]; g.fillStyle = COLORS[k] + '33';
+      g.fillRect(b[0] * W, b[1] * H, (b[2] - b[0]) * W, (b[3] - b[1]) * H);
+      g.strokeRect(b[0] * W, b[1] * H, (b[2] - b[0]) * W, (b[3] - b[1]) * H);
+    }
+    // 상태·경고
+    const notes = [];
+    for (const k of ['sky', 'far']) {
+      const b = st[k];
+      if (!b) { notes.push(`${NAMES[k]}: 아직 안 그림`); continue; }
+      if (b === 'none') { notes.push(`${NAMES[k]}: 없음 (사진 전체 사용)`); continue; }
+      const w = (b[2] - b[0]) * c.w, h = (b[3] - b[1]) * c.h, r = Math.max(w / h, h / w);
+      let t = `${NAMES[k]}: ${Math.round(w)}×${Math.round(h)} (가로:세로 ${(w / h).toFixed(1)}:1)`;
+      if (r > 3) t += ' <span class="w">← 3:1을 넘어 많이 찌그러집니다</span>';
+      if (w < c.w / 4 && h < c.h / 4) t += ' <span class="w">← 작아서 흐릿해질 수 있습니다</span>';
+      notes.push(t);
+    }
+    msg.innerHTML = notes.join(' · ');
+    state.className = 'state ' + (done(c.cam) ? 'done' : 'todo'); state.textContent = done(c.cam) ? '완료' : '미완료';
+    for (const k of ['sky', 'far']) { btn(`[data-mode="${k}"]`).classList.toggle('on', mode === k); btn(`[data-none="${k}"]`).classList.toggle('on', st[k] === 'none'); }
+    upd();
+  }
+  sec.querySelectorAll('[data-img]').forEach(b => b.onclick = () => {
+    img.src = '../images/' + c[b.dataset.img];
+    sec.querySelectorAll('[data-img]').forEach(x => x.classList.toggle('on', x === b));
+  });
+  sec.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => { mode = mode === b.dataset.mode ? null : b.dataset.mode; draw(); });
+  sec.querySelectorAll('[data-none]').forEach(b => b.onclick = () => {
+    const k = b.dataset.none; st[k] = st[k] === 'none' ? undefined : 'none'; if (mode === k) mode = null; keep(); draw();
+  });
+  const pos = e => { const r = cv.getBoundingClientRect(); return [Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))]; };
+  cv.onpointerdown = e => { if (!mode) { msg.innerHTML = '<span class="w">먼저 [하늘 그리기] 또는 [먼 건물·산 그리기]를 누르세요</span>'; return; }
+    cv.setPointerCapture(e.pointerId); const p = pos(e); drag = {k: mode, p, b: [p[0], p[1], p[0], p[1]]}; };
+  cv.onpointermove = e => { if (!drag) return; const p = pos(e);
+    drag.b = [Math.min(drag.p[0], p[0]), Math.min(drag.p[1], p[1]), Math.max(drag.p[0], p[0]), Math.max(drag.p[1], p[1])]; draw(); };
+  cv.onpointerup = () => { if (!drag) return; const b = drag.b;
+    if ((b[2] - b[0]) > 0.02 && (b[3] - b[1]) > 0.02) st[drag.k] = b.map(v => Math.round(v * 1000) / 1000);
+    drag = null; keep(); draw(); };
+  img.onload = draw; window.addEventListener('resize', draw);
+  document.getElementById('root').appendChild(sec);
+}
+upd();
+
+function save() {
+  const rows = ['camera,kind,x0,y0,x1,y1'];
+  for (const c of CAMS) for (const k of ['sky', 'far']) {
+    const b = (S[c.cam] || {})[k];
+    rows.push(b === 'none' ? `${c.cam},${k},none,,,` : b ? `${c.cam},${k},${b.join(',')}` : `${c.cam},${k},,,,`);
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([String.fromCharCode(0xFEFF) + rows.join(String.fromCharCode(10))], {type: 'text/csv'}));
+  a.download = 'roi.csv'; a.click();
+  const left = CAMS.filter(c => !done(c.cam)).length;
+  if (left) alert(`저장했습니다. 아직 ${left}개 카메라가 미완료입니다 (나중에 이어서 그리고 다시 저장해도 됩니다).`);
+}
+</script></body></html>

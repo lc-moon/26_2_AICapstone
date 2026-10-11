@@ -3,17 +3,20 @@
 #   python Model/cnn.py --version incheon        인천 ver. 연습시험으로 바퀴 수를 정하고, 개발 날짜 전체로 최종 모델을 만든다
 #   python Model/cnn.py --version incheon_log    인천 ver과 같고 log(1+PM2.5)를 배운다 (로그의 효과만 따로 보려고)
 #   python Model/cnn.py --version mixed          인천+베이징 ver. 베이징 학습 날짜를 섞고 log(1+PM2.5)를 배운다
+#   python Model/cnn.py --version mixed --input sky    입력 종류 (기본 masked = 사진 전체 + 글자 가림). INPUTS 참고
 #   python Model/cnn.py --test                   저장된 최종 모델 전부를 시험지 A(인천)·B(베이징)로 채점. 모든 작업이 끝난 뒤 한 번만
-#   여러 개를 이어서 돌릴 때는 Model/queue.py
+#   여러 개를 이어서 돌릴 때는 Model/run_queue.py
 #
 # 입력: data/labels/labels.csv·labels_beijing.csv, data/images/, 거르기는 베이스라인과 같다 (view_check.py·view_review.csv)
-# 결과: data/model/cnn/{버전}_full/  epochs.csv  바퀴별 연습시험 점수 (인천·베이징)
-#                                    pred_cv.csv 연습시험 사진별 예측 (그 날이 빠진 묶음 모델의 예측, 고른 바퀴 기준)
-#                                    model.pt    최종 모델   info.json 설정과 고른 바퀴
-#       data/model/cnn_cache/        384×384로 줄인 사진 (사진 목록이 같으면 다시 쓴다)
+#       글자 자리 Model/text_mask/ (text_mask.py), ROI 상자 Model/roi.csv (roi.py)
+# 결과: data/model/cnn/{버전}_{입력}/  epochs.csv  바퀴별 연습시험 점수 (인천·베이징)
+#                                      pred_cv.csv 연습시험 사진별 예측 (그 날이 빠진 묶음 모델의 예측, 고른 바퀴 기준)
+#                                      model.pt    최종 모델   info.json 설정과 고른 바퀴
+#       data/model/cnn_cache/{입력}_384.npy  가리고 자르고 384×384로 줄인 사진 (사진 목록이 같으면 다시 쓴다)
 #
 # 결정 사항 (docs/현황.md §7, 2026-10-11)
-#   - 사진 전체를 384×384로 늘이거나 줄여 맞춘다. 사전학습 때와 같은 방식(crop_mode squash)
+#   - 사진 전체(또는 ROI 상자)를 384×384로 늘이거나 줄여 맞춘다. 사전학습 때와 같은 방식(crop_mode squash)
+#   - 화면 위 글자(시각·지명)는 평균색으로 가린다. 시각을 읽는 지름길을 막으려고 (10/11 오후부터. full 입력만 예외)
 #   - 카메라·도시 정보는 주지 않는다. "베이징이면 높게" 같은 지름길을 배우지 않게
 #   - 증강은 살짝 잘라내기·좌우 뒤집기만. 색·밝기는 정답 신호라 건드리지 않는다
 #   - 인천+베이징 ver은 log(1+PM2.5)를 배운다. 베이징 200대의 큰 오차가 학습을 장악하지 않게. 점수는 원래 농도로 낸다
@@ -30,6 +33,7 @@ import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
 from datetime import date, datetime
+from functools import lru_cache
 from pathlib import Path
 
 import cv2
@@ -40,7 +44,9 @@ import torch
 import torch.nn.functional as F
 from timm.layers.grn import GlobalResponseNorm
 
+import text_mask
 from baseline import HUMIDITY_MAX, LABELS, WEATHER, fold_of, is_test_day, scores, view_info
+from roi import FULL, box as roi_box, load_roi
 from view_check import load_review
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -64,6 +70,13 @@ VERSIONS = {           # 이름: (베이징을 배우나, 로그로 배우나)
     "incheon_log": (False, True),
     "mixed": (True, True),
 }
+INPUTS = {             # 이름: 설명. full 말고는 모두 화면 위 글자를 가린다 (text_mask.py)
+    "full": "사진 전체 (글자 그대로 — 10/11 오전까지의 1단계)",
+    "masked": "사진 전체 + 글자 가림",
+    "sky": "ROI ① 하늘", "far": "ROI ② 먼 건물·산", "both": "ROI ③ 하늘+먼 건물·산",
+    "top3": "ROI ④ 위쪽 1/3", "top60": "ROI ⑤ 위쪽 60%",
+}
+FILL = (104, 116, 124)  # 가린 자리를 칠할 색 (BGR). 사전학습 입력의 평균색이라 표준화하면 0 = "정보 없음"
 DEV = "cuda"
 MEAN = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1) * 255
 STD = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1) * 255
@@ -121,26 +134,49 @@ def load():
     return d
 
 
-def _resized(path):
-    return cv2.resize(cv2.imread(str(path)), (SIZE, SIZE), interpolation=cv2.INTER_AREA)[:, :, ::-1]
+@lru_cache(maxsize=None)
+def _mask(scene):
+    return text_mask.load(scene)
 
 
-def cache(images):
-    """사진을 384×384로 줄여 한 파일(uint8, 장×세로×가로×RGB)에 모은다. 매 바퀴 원본을 다시 줄이지 않게.
+def _resized(job):
+    """사진 한 장 → (글자 가림) → (ROI 상자로 자르기) → 384×384 RGB"""
+    path, scene, masked, b = job
+    img = cv2.imread(str(path))
+    m = _mask(scene) if masked else None
+    if m is not None:
+        img[m] = FILL
+    h, w = img.shape[:2]
+    img = img[round(b[1] * h):round(b[3] * h), round(b[0] * w):round(b[2] * w)]
+    return cv2.resize(img, (SIZE, SIZE), interpolation=cv2.INTER_AREA)[:, :, ::-1]
+
+
+def cache(d, kind):
+    """사진을 입력 종류대로 가리고 잘라 384×384로 줄여 한 파일(uint8, 장×세로×가로×RGB)에 모은다. 매 바퀴 원본을 다시 줄이지 않게.
     사진 목록이 바뀌면 다시 만든다(1.6만 장에 1분 남짓). 목록 파일은 다 만든 뒤에 써서, 중간에 끊기면 다음에 다시 만든다"""
-    arr, idx = CACHE / f"full_{SIZE}.npy", CACHE / f"full_{SIZE}.csv"
-    if arr.exists() and idx.exists() and pd.read_csv(idx).image.tolist() == list(images):
+    images = d.image.tolist()
+    arr, idx = CACHE / f"{kind}_{SIZE}.npy", CACHE / f"{kind}_{SIZE}.csv"
+    if arr.exists() and idx.exists() and pd.read_csv(idx).image.tolist() == images:
         return np.load(arr, mmap_mode="r")
-    print(f"사진 {len(images)}장을 {SIZE}×{SIZE}로 줄이는 중 → {arr}")
+    if kind in ("full", "masked"):
+        boxes = [FULL] * len(d)
+    else:
+        rois = load_roi()
+        missing = sorted(set(d.camera_id) - set(rois)) if kind in ("sky", "far", "both") else []
+        if missing:
+            sys.exit(f"ROI 상자가 없는 카메라: {missing}. python Model/roi.py 로 그린 뒤 --apply 하세요")
+        boxes = [roi_box(rois, c, kind) for c in d.camera_id]
+    jobs = [(IMAGES / p, s, kind != "full", b) for p, s, b in zip(images, d.scene, boxes)]
+    print(f"사진 {len(images)}장을 입력 '{kind}'로 만드는 중 → {arr}")
     CACHE.mkdir(parents=True, exist_ok=True)
     idx.unlink(missing_ok=True)
     out = np.lib.format.open_memmap(arr, mode="w+", dtype=np.uint8, shape=(len(images), SIZE, SIZE, 3))
     with ProcessPoolExecutor(8) as ex:
-        for i, img in enumerate(ex.map(_resized, [IMAGES / p for p in images], chunksize=32)):
+        for i, img in enumerate(ex.map(_resized, jobs, chunksize=32)):
             out[i] = img
     out.flush()
     del out
-    pd.DataFrame({"image": list(images)}).to_csv(idx, index=False)
+    pd.DataFrame({"image": images}).to_csv(idx, index=False)
     return np.load(arr, mmap_mode="r")
 
 
@@ -224,9 +260,9 @@ def pick_epoch(table, use_bj):
     return int(ok["베이징MAE"].idxmin())
 
 
-def run(d, arr, version):
+def run(d, arr, version, kind):
     use_bj, log = VERSIONS[version]
-    out = OUT / f"{version}_full"
+    out = OUT / f"{version}_{kind}"
     out.mkdir(parents=True, exist_ok=True)
     inc = d[(d.city == "inc") & (d.part != "A")]
     bj = d[(d.city == "bj") & (d.part != "B")]
@@ -261,7 +297,7 @@ def run(d, arr, version):
     print(f"\n[최종 모델] 인천 개발 {inc.day.nunique()}일{f' + 베이징 학습 {bj.day.nunique()}일' if use_bj else ''}로 {best}바퀴")
     model, _ = train(arr, d, learn.index.values, log, "최종", stop=best)
     torch.save(model.state_dict(), out / "model.pt")
-    info = {"version": version, "input": "full", "model": NAME, "beijing_train": use_bj, "log_target": log, "best_epoch": best,
+    info = {"version": version, "input": kind, "model": NAME, "beijing_train": use_bj, "log_target": log, "best_epoch": best,
             "cv": table.loc[best].round(3).to_dict(), "train_photos": int(len(learn)),
             "batch": BATCH, "lr": LR, "max_epochs": EPOCHS, "minutes": round((time.time() - t_start) / 60, 1),
             "finished": datetime.now().isoformat(timespec="seconds")}
@@ -269,13 +305,14 @@ def run(d, arr, version):
     print(f"저장: {out} ({info['minutes']}분)")
 
 
-def test(d, arr):
+def test(d):
     runs = sorted(p.parent for p in OUT.glob("*/model.pt"))
     if not runs:
         sys.exit("저장된 최종 모델이 없습니다")
     rows, preds = {}, []
     for r in runs:
         info = json.loads((r / "info.json").read_text(encoding="utf-8"))
+        arr = cache(d, info["input"])
         model = make_model(pretrained=False)
         model.load_state_dict(torch.load(r / "model.pt", map_location=DEV))
         for sheet in ("A", "B"):
@@ -294,6 +331,8 @@ def test(d, arr):
 def main():
     ap = argparse.ArgumentParser(description="ConvNeXt V2-Tiny 미세조정 → PM2.5")
     ap.add_argument("--version", choices=list(VERSIONS), help="incheon: 인천만, incheon_log: 인천만·로그, mixed: 인천+베이징·로그")
+    ap.add_argument("--input", choices=list(INPUTS), default="masked",
+                    help="; ".join(f"{k}: {v}" for k, v in INPUTS.items()) + " (기본 masked)")
     ap.add_argument("--test", action="store_true", help="저장된 최종 모델을 시험지 A·B로 채점 (모든 작업이 끝난 뒤 한 번만)")
     args = ap.parse_args()
     if not args.test and not args.version:
@@ -303,11 +342,11 @@ def main():
     torch.cuda.set_per_process_memory_fraction(0.8)
     torch.backends.cudnn.benchmark = True
     d = load()
-    arr = cache(d.image)
     if args.test:
-        test(d, arr)
+        test(d)
     else:
-        run(d, arr, args.version)
+        print(f"입력: {args.input} — {INPUTS[args.input]}")
+        run(d, cache(d, args.input), args.version, args.input)
 
 
 if __name__ == "__main__":
