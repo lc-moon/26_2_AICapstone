@@ -57,7 +57,8 @@ C:\26_2_AICapstone\
 │  ├─ view_mask\           장면마다 화면 위 글자(지명 표시) 자리 — 특징점을 찾을 때 가린다
 │  ├─ view_review.csv      사람이 검수한 결정 (사진 경로·제외/정상·사유)
 │  ├─ baseline.py          거르기·날짜 분할·회귀·평가 → data\model\baseline_pred.csv
-│  ├─ cnn.py               ConvNeXt V2-Tiny 미세조정 (인천 ver / 인천+베이징 ver) → data\model\cnn\
+│  ├─ cnn.py               ConvNeXt V2-Tiny 미세조정 (인천 ver / 인천 log ver / 인천+베이징 ver) → data\model\cnn\
+│  ├─ run_queue.py         cnn.py 여러 개를 이어서 실행 (실패해도 다음 진행, 절전 방지, 기록 파일)
 │  └─ requirements.txt     학습용 패키지 (수집기용과 별도)
 │
 ├─ deploy\              서버 설치 스크립트
@@ -72,7 +73,7 @@ C:\26_2_AICapstone\
 │  ├─ logs\                수집 로그·기상 CSV (vm\는 VM에서 받은 사본)
 │  ├─ labels\              학습용 표(labels.csv, 베이징은 labels_beijing.csv)와 API 원본 응답 — raw\airkorea\는 지우지 말 것
 │  ├─ contact_sheets\      이미지 확인용 모아보기
-│  ├─ model\               이미지 특징(features.csv)·베이스라인 사진별 예측(baseline_pred.csv)·CNN 결과(cnn\)·384로 줄인 사진(cnn_cache\, 7GB)
+│  ├─ model\               이미지 특징(features.csv)·베이스라인 사진별 예측(baseline_pred.csv)·CNN 결과(cnn\, 설계가 바뀌기 전 결과는 cnn_archive\)·384로 줄인 사진(cnn_cache\, 7GB)
 │  ├─ screening\           화각 스크리닝 산출물
 │  └─ songui_pm25\         PM2.5 원본·정제·차트
 │
@@ -172,8 +173,10 @@ python Model\baseline.py          베이스라인 — 날짜 단위 교차검증
 python Model\baseline.py --cv3    같은 점수를 CNN과 같은 날짜 3묶음으로 (CNN과 나란히 비교)
 python Model\baseline.py --test   시험 A 점수. 모델을 다 고른 뒤에만 볼 것
 python Model\cnn.py --version incheon   CNN 인천 ver — 연습시험(3묶음×최대 15바퀴)으로 바퀴 수를 정하고 최종 모델 저장
+python Model\cnn.py --version incheon_log   CNN 인천 ver을 로그로 학습 (로그 효과 확인용)
 python Model\cnn.py --version mixed     CNN 인천+베이징 ver — 베이징 학습 날짜를 섞는다
 python Model\cnn.py --test              저장된 CNN 전부를 시험지 A(인천)·B(베이징)로 채점. 모든 작업이 끝난 뒤 한 번만
+python Model\run_queue.py "--version incheon_log" "--version mixed"   여러 개를 이어서 (기록: data\model\cnn\run_log.txt)
 ```
 
 **CNN을 돌리는 동안에는 게임 등 GPU를 쓰는 프로그램을 끕니다.** 같이 쓰면 속도가 몇 분의 1로 떨어지고,
@@ -191,6 +194,8 @@ GPU 메모리가 넘치면 Windows가 PC 메모리를 빌려 쓰며 수십 배 �
 - 사진별 정답·예측은 `data\model\baseline_pred.csv`에 남습니다. 어디서 틀리는지 볼 때 씁니다
 - **CNN**은 사진 전체를 384×384로 맞춰 넣고, 카메라·도시 정보는 주지 않습니다. 증강은 살짝 잘라내기·좌우 뒤집기만(색·밝기는 정답 신호라 금지).
   인천+베이징 ver은 log(1+PM2.5)를 배웁니다. 시험지 B는 베이징 첫날(2019-05-19)부터 4일마다 하루로, 어느 버전도 학습에 쓰지 않습니다.
+  연습시험은 인천·베이징을 각각 3묶음으로 나눠 같은 번호끼리 함께 빼고, 두 도시 점수를 모두 기록합니다.
+  바퀴 수는 인천 ver은 인천 점수로, 인천+베이징 ver은 "인천이 최고와 0.1 이내인 바퀴 중 베이징이 가장 좋은 바퀴"로 고릅니다.
   결과는 `data\model\cnn\{버전}_full\`에 바퀴별 연습시험 점수(epochs.csv)·사진별 예측(pred_cv.csv)·최종 모델(model.pt)로 남습니다
 
 ---

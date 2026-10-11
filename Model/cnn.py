@@ -1,12 +1,14 @@
 # CNN — 사전학습 ConvNeXt V2-Tiny를 미세조정해 사진만 보고 PM2.5를 맞힌다.
 #
-#   python Model/cnn.py --version incheon    인천 ver. 연습시험으로 바퀴 수를 정하고, 개발 날짜 전체로 최종 모델을 만든다
-#   python Model/cnn.py --version mixed      인천+베이징 ver. 위와 같고 베이징 학습 날짜를 섞는다
-#   python Model/cnn.py --test               저장된 최종 모델 전부를 시험지 A(인천)·B(베이징)로 채점. 모든 작업이 끝난 뒤 한 번만
+#   python Model/cnn.py --version incheon        인천 ver. 연습시험으로 바퀴 수를 정하고, 개발 날짜 전체로 최종 모델을 만든다
+#   python Model/cnn.py --version incheon_log    인천 ver과 같고 log(1+PM2.5)를 배운다 (로그의 효과만 따로 보려고)
+#   python Model/cnn.py --version mixed          인천+베이징 ver. 베이징 학습 날짜를 섞고 log(1+PM2.5)를 배운다
+#   python Model/cnn.py --test                   저장된 최종 모델 전부를 시험지 A(인천)·B(베이징)로 채점. 모든 작업이 끝난 뒤 한 번만
+#   여러 개를 이어서 돌릴 때는 Model/queue.py
 #
 # 입력: data/labels/labels.csv·labels_beijing.csv, data/images/, 거르기는 베이스라인과 같다 (view_check.py·view_review.csv)
-# 결과: data/model/cnn/{버전}_full/  epochs.csv  바퀴별 연습시험 점수
-#                                    pred_cv.csv 개발 날짜 사진별 예측 (그 날이 빠진 묶음 모델의 예측, 고른 바퀴 기준)
+# 결과: data/model/cnn/{버전}_full/  epochs.csv  바퀴별 연습시험 점수 (인천·베이징)
+#                                    pred_cv.csv 연습시험 사진별 예측 (그 날이 빠진 묶음 모델의 예측, 고른 바퀴 기준)
 #                                    model.pt    최종 모델   info.json 설정과 고른 바퀴
 #       data/model/cnn_cache/        384×384로 줄인 사진 (사진 목록이 같으면 다시 쓴다)
 #
@@ -15,8 +17,11 @@
 #   - 카메라·도시 정보는 주지 않는다. "베이징이면 높게" 같은 지름길을 배우지 않게
 #   - 증강은 살짝 잘라내기·좌우 뒤집기만. 색·밝기는 정답 신호라 건드리지 않는다
 #   - 인천+베이징 ver은 log(1+PM2.5)를 배운다. 베이징 200대의 큰 오차가 학습을 장악하지 않게. 점수는 원래 농도로 낸다
-#   - 연습시험: 개발 14일을 날짜 번호 % 4 (0·1·2)로 3묶음. 베이징 학습 날짜는 모든 묶음에서 학습에만 쓰고 채점은 인천만
-#   - 바퀴 수: 최대 15바퀴 동안 매 바퀴 연습시험 → 오차가 가장 작은 바퀴. 최종 모델은 같은 학습 일정으로 그 바퀴에서 멈춘다
+#   - 연습시험: 인천 개발 14일과 베이징 학습 206일을 각각 날짜 번호 % 4 (0·1·2)로 3묶음. 회차마다 같은 번호의
+#     인천·베이징 묶음을 함께 빼고 채점한다. 베이징을 배우지 않는 버전도 베이징 묶음을 채점해 기록한다
+#   - 바퀴 수: 최대 15바퀴 동안 매 바퀴 연습시험. 인천 ver은 인천 오차가 가장 작은 바퀴.
+#     인천+베이징 ver은 인천 오차가 최고 바퀴와 0.1 이내인 바퀴들 중 베이징 오차가 가장 작은 바퀴 (인천은 지키고 베이징을 올린다)
+#     최종 모델은 같은 학습 일정으로 그 바퀴에서 멈춘다
 #   - 시험지 B = 베이징 첫날(2019-05-19)부터 센 날짜 번호 % 4 == 3인 날. 어느 버전도 학습에 쓰지 않는다
 import argparse
 import json
@@ -53,6 +58,12 @@ LR = 1e-4
 WEIGHT_DECAY = 0.05
 DROP_PATH = 0.1
 SEED = 0
+TOLERANCE = 0.1        # 인천 오차 차이가 이 안이면 같은 수준으로 본다
+VERSIONS = {           # 이름: (베이징을 배우나, 로그로 배우나)
+    "incheon": (False, False),
+    "incheon_log": (False, True),
+    "mixed": (True, True),
+}
 DEV = "cuda"
 MEAN = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1) * 255
 STD = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1) * 255
@@ -100,10 +111,12 @@ def load():
     d = d[keep].reset_index(drop=True)
 
     inc = d.city == "inc"
+    # 인천 f0·f1·f2 / 시험지 A, 베이징 b0·b1·b2 / 시험지 B. 번호가 같은 묶음끼리 같은 회차에 빠진다
+    bj_n = d.day.map(lambda x: (x - BJ_FIRST_DAY).days % 4)
     d["part"] = np.where(inc, d.day.map(lambda x: "A" if is_test_day(x) else f"f{fold_of(x)}"),
-                         d.day.map(lambda x: "B" if (x - BJ_FIRST_DAY).days % 4 == 3 else "bj"))
+                         np.where(bj_n == 3, "B", "b" + bj_n.astype(str)))
     for name, m in [("인천 개발", inc & (d.part != "A")), ("시험지 A", d.part == "A"),
-                    ("베이징 학습", d.part == "bj"), ("시험지 B", d.part == "B")]:
+                    ("베이징 학습", ~inc & (d.part != "B")), ("시험지 B", d.part == "B")]:
         print(f"  = {name:8} {d[m].day.nunique():3}일 {int(m.sum()):5}장, PM2.5 평균 {d[m].pm25.mean():5.1f} 최대 {d[m].pm25.max():4.0f}")
     return d
 
@@ -197,41 +210,59 @@ def train(arr, d, train_rows, log, label, eval_rows=None, stop=None):
         msg = f"  [{label}] {ep:2}바퀴 학습 손실 {loss_sum.item() / steps:.3f}"
         if eval_rows is not None:
             preds.append(predict(model, arr, eval_rows, log))
-            msg += f"  연습시험 MAE {np.abs(preds[-1] - y[eval_rows]).mean():.2f}"
+            err, inc = np.abs(preds[-1] - y[eval_rows]), d.city.values[eval_rows] == "inc"
+            msg += f"  연습시험 MAE 인천 {err[inc].mean():.2f} 베이징 {err[~inc].mean():.2f}"
         print(f"{msg}  ({time.time() - t0:.0f}초)", flush=True)
     return model, preds
 
 
+def pick_epoch(table, use_bj):
+    """인천 ver: 인천 오차가 가장 작은 바퀴. 인천+베이징 ver: 인천 오차가 최고 바퀴와 TOLERANCE 이내인 바퀴들 중 베이징 오차가 가장 작은 바퀴"""
+    if not use_bj:
+        return int(table.MAE.idxmin())
+    ok = table[table.MAE <= table.MAE.min() + TOLERANCE]
+    return int(ok["베이징MAE"].idxmin())
+
+
 def run(d, arr, version):
-    log = version == "mixed"
+    use_bj, log = VERSIONS[version]
     out = OUT / f"{version}_full"
     out.mkdir(parents=True, exist_ok=True)
-    dev = d[(d.city == "inc") & (d.part != "A")]
-    extra = d.index[d.part == "bj"].values if version == "mixed" else np.array([], dtype=int)
+    inc = d[(d.city == "inc") & (d.part != "A")]
+    bj = d[(d.city == "bj") & (d.part != "B")]
     t_start = time.time()
 
-    print(f"\n[연습시험] 날짜 3묶음 × 최대 {EPOCHS}바퀴 (학습: 인천 2묶음{' + 베이징 ' + str(len(extra)) + '장' if len(extra) else ''})")
-    P = np.zeros((EPOCHS, len(dev)))
-    for f in sorted(dev.part.unique()):
-        val = (dev.part == f).values
-        rows = np.concatenate([dev.index[~val].values, extra])
-        _, preds = train(arr, d, rows, log, f"묶음 {f[1]}", eval_rows=dev.index[val].values)
+    print(f"\n[연습시험] 날짜 3묶음 × 최대 {EPOCHS}바퀴 (학습: 인천 2묶음{' + 베이징 2묶음' if use_bj else ''}, 채점: 인천·베이징 1묶음씩)")
+    ev = pd.concat([inc, bj])
+    P = np.zeros((EPOCHS, len(ev)))
+    for f in ("0", "1", "2"):
+        val = ev.part.isin([f"f{f}", f"b{f}"]).values
+        learn = ev[~val & ((ev.city == "inc") | use_bj).values]
+        _, preds = train(arr, d, learn.index.values, log, f"묶음 {f}", eval_rows=ev.index[val].values)
         P[:, val] = np.array(preds)
-    ev = dev.reset_index(drop=True)
-    table = pd.DataFrame([scores(ev, P[e]) for e in range(EPOCHS)], index=pd.RangeIndex(1, EPOCHS + 1, name="epoch"))
-    best = int(table.MAE.idxmin())
+    ev = ev.reset_index(drop=True)
+    is_inc = (ev.city == "inc").values
+    rows = []
+    for e in range(EPOCHS):
+        s = scores(ev[is_inc].reset_index(drop=True), P[e, is_inc])
+        s.update({f"베이징{k}": v for k, v in scores(ev[~is_inc].reset_index(drop=True), P[e, ~is_inc]).items()})
+        rows.append(s)
+    table = pd.DataFrame(rows, index=pd.RangeIndex(1, EPOCHS + 1, name="epoch"))
+    best = pick_epoch(table, use_bj)
     table.round(3).to_csv(out / "epochs.csv", encoding="utf-8-sig")
     print(table.round(2).to_string())
-    print(f"→ {best}바퀴가 가장 좋음 (MAE {table.MAE[best]:.2f}, 시간 MAE {table['시간MAE'][best]:.2f})")
+    print(f"→ {best}바퀴 (인천 MAE {table.MAE[best]:.2f}, 베이징 MAE {table['베이징MAE'][best]:.2f}"
+          f"{', 인천 최고와 ' + str(TOLERANCE) + ' 이내 중 베이징이 가장 좋은 바퀴' if use_bj else ', 인천이 가장 좋은 바퀴'})")
     pred = ev[["image", "camera_id", "scene", "captured_at", "pm_time", "pm25", "humidity", "sun_alt"]].copy()
     pred["pred"] = P[best - 1].round(2)
     pred.to_csv(out / "pred_cv.csv", index=False, encoding="utf-8-sig")
 
-    print(f"\n[최종 모델] 인천 개발 14일{' + 베이징' if len(extra) else ''}로 {best}바퀴")
-    model, _ = train(arr, d, np.concatenate([dev.index.values, extra]), log, "최종", stop=best)
+    learn = pd.concat([inc, bj]) if use_bj else inc
+    print(f"\n[최종 모델] 인천 개발 {inc.day.nunique()}일{f' + 베이징 학습 {bj.day.nunique()}일' if use_bj else ''}로 {best}바퀴")
+    model, _ = train(arr, d, learn.index.values, log, "최종", stop=best)
     torch.save(model.state_dict(), out / "model.pt")
-    info = {"version": version, "input": "full", "model": NAME, "log_target": log, "best_epoch": best,
-            "cv": table.loc[best].round(3).to_dict(), "train_photos": int(len(dev) + len(extra)),
+    info = {"version": version, "input": "full", "model": NAME, "beijing_train": use_bj, "log_target": log, "best_epoch": best,
+            "cv": table.loc[best].round(3).to_dict(), "train_photos": int(len(learn)),
             "batch": BATCH, "lr": LR, "max_epochs": EPOCHS, "minutes": round((time.time() - t_start) / 60, 1),
             "finished": datetime.now().isoformat(timespec="seconds")}
     (out / "info.json").write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -262,7 +293,7 @@ def test(d, arr):
 
 def main():
     ap = argparse.ArgumentParser(description="ConvNeXt V2-Tiny 미세조정 → PM2.5")
-    ap.add_argument("--version", choices=["incheon", "mixed"], help="incheon: 인천만, mixed: 인천+베이징")
+    ap.add_argument("--version", choices=list(VERSIONS), help="incheon: 인천만, incheon_log: 인천만·로그, mixed: 인천+베이징·로그")
     ap.add_argument("--test", action="store_true", help="저장된 최종 모델을 시험지 A·B로 채점 (모든 작업이 끝난 뒤 한 번만)")
     args = ap.parse_args()
     if not args.test and not args.version:
