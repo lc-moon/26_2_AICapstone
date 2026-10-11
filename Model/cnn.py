@@ -332,7 +332,7 @@ def main():
     ap = argparse.ArgumentParser(description="ConvNeXt V2-Tiny 미세조정 → PM2.5")
     ap.add_argument("--version", choices=list(VERSIONS), help="incheon: 인천만, incheon_log: 인천만·로그, mixed: 인천+베이징·로그")
     ap.add_argument("--input", choices=list(INPUTS), default="masked",
-                    help="; ".join(f"{k}: {v}" for k, v in INPUTS.items()) + " (기본 masked)")
+                    help="; ".join(f"{k}: {v}" for k, v in INPUTS.items()).replace("%", "%%") + " (기본 masked)")
     ap.add_argument("--test", action="store_true", help="저장된 최종 모델을 시험지 A·B로 채점 (모든 작업이 끝난 뒤 한 번만)")
     args = ap.parse_args()
     if not args.test and not args.version:
