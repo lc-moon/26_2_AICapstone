@@ -4,12 +4,13 @@
 #   python Model/cnn.py --version incheon_log    인천 ver과 같고 log(1+PM2.5)를 배운다 (로그의 효과만 따로 보려고)
 #   python Model/cnn.py --version mixed          인천+베이징 ver. 베이징 학습 날짜를 섞고 log(1+PM2.5)를 배운다
 #   python Model/cnn.py --version mixed --input sky    입력 종류 (기본 masked = 사진 전체 + 글자 가림). INPUTS 참고
+#   python Model/cnn.py --version mixed --input sky --weather humidity sun_alt --epochs 12   기상을 사진 특징 옆에 붙임
 #   python Model/cnn.py --test                   저장된 최종 모델 전부를 시험지 A(인천)·B(베이징)로 채점. 모든 작업이 끝난 뒤 한 번만
 #   여러 개를 이어서 돌릴 때는 Model/run_queue.py
 #
 # 입력: data/labels/labels.csv·labels_beijing.csv, data/images/, 거르기는 베이스라인과 같다 (view_check.py·view_review.csv)
 #       글자 자리 Model/text_mask/ (text_mask.py), ROI 상자 Model/roi.csv (roi.py)
-# 결과: data/model/cnn/{버전}_{입력}/  epochs.csv  바퀴별 연습시험 점수 (인천·베이징)
+# 결과: data/model/cnn/{버전}_{입력}[_w-기상]/  epochs.csv  바퀴별 연습시험 점수 (인천·베이징)
 #                                      pred_cv.csv 연습시험 사진별 예측 (그 날이 빠진 묶음 모델의 예측, 고른 바퀴 기준)
 #                                      model.pt    최종 모델   info.json 설정과 고른 바퀴
 #       data/model/cnn_cache/{입력}_384.npy  가리고 자르고 384×384로 줄인 사진 (사진 목록이 같으면 다시 쓴다)
@@ -77,6 +78,7 @@ INPUTS = {             # 이름: 설명. full 말고는 모두 화면 위 글자
     "top3": "ROI ④ 위쪽 1/3", "top60": "ROI ⑤ 위쪽 60%",
     "auto": "ROI ⑥ 자동 (먼지 민감도 지도, 연습시험 회차마다 공부 날짜로 만든 상자)",
 }
+SHORT = {"humidity": "hum", "temperature": "temp", "wind_speed": "wind", "sun_alt": "sun"}   # 결과 폴더 이름용
 FILL = (104, 116, 124)  # 가린 자리를 칠할 색 (BGR). 사전학습 입력의 평균색이라 표준화하면 0 = "정보 없음"
 DEV = "cuda"
 MEAN = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1) * 255
@@ -188,10 +190,32 @@ def cache(d, kind):
     return np.load(arr, mmap_mode="r")
 
 
-def make_model(bias=0.0, pretrained=True):
-    m = timm.create_model(NAME, pretrained=pretrained, num_classes=1, drop_path_rate=DROP_PATH)
-    torch.nn.init.constant_(m.head.fc.bias, bias)       # 처음부터 평균 근처를 부르게
+class WeatherNet(torch.nn.Module):
+    """사진 특징(768개) 옆에 기상 숫자를 붙여 마지막 판단(선형)에 함께 넣는다. 기상은 학습 사진의 평균·표준편차로 표준화"""
+
+    def __init__(self, n, pretrained):
+        super().__init__()
+        self.body = timm.create_model(NAME, pretrained=pretrained, num_classes=0, drop_path_rate=DROP_PATH)
+        self.fc = torch.nn.Linear(self.body.num_features + n, 1)
+        self.register_buffer("mu", torch.zeros(n))
+        self.register_buffer("sd", torch.ones(n))
+
+    def forward(self, x, w):
+        return self.fc(torch.cat([self.body(x), (w - self.mu) / self.sd], 1))
+
+
+def make_model(bias=0.0, pretrained=True, n_weather=0):
+    if n_weather:
+        m = WeatherNet(n_weather, pretrained)
+        torch.nn.init.constant_(m.fc.bias, bias)
+    else:
+        m = timm.create_model(NAME, pretrained=pretrained, num_classes=1, drop_path_rate=DROP_PATH)
+        torch.nn.init.constant_(m.head.fc.bias, bias)       # 처음부터 평균 근처를 부르게
     return m.to(DEV).to(memory_format=torch.channels_last)
+
+
+def forward(model, x, W, rows):
+    return model(x) if W is None else model(x, torch.from_numpy(W[rows]).to(DEV))
 
 
 def batch(arr, rows):
@@ -212,24 +236,29 @@ def augment(x):
 
 
 @torch.no_grad()
-def predict(model, arr, rows, log):
+def predict(model, arr, rows, log, W=None):
     model.eval()
     out = []
     for i in range(0, len(rows), 32):
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            out.append(model(batch(arr, rows[i:i + 32])).squeeze(1).float().cpu())
+            out.append(forward(model, batch(arr, rows[i:i + 32]), W, rows[i:i + 32]).squeeze(1).float().cpu())
     p = torch.cat(out).numpy()
     return np.expm1(p) if log else p
 
 
-def train(arr, d, train_rows, log, label, eval_rows=None, stop=None):
+def train(arr, d, train_rows, log, label, eval_rows=None, stop=None, weather=()):
     """train_rows로 EPOCHS바퀴 일정(1바퀴 준비 + 코사인 감소)을 따라 학습한다.
-    eval_rows가 있으면 매 바퀴 그 사진들의 예측(원래 농도)을 모아 돌려주고, stop이 있으면 그 바퀴에서 멈춘다"""
+    eval_rows가 있으면 매 바퀴 그 사진들의 예측(원래 농도)을 모아 돌려주고, stop이 있으면 그 바퀴에서 멈춘다.
+    weather에 기상 칸 이름을 주면 사진 특징 옆에 붙여 함께 배운다"""
     torch.manual_seed(SEED)
     rng = np.random.default_rng(SEED)
     y = d.pm25.values.astype(np.float32)
     target = np.log1p(y) if log else y
-    model = make_model(float(target[train_rows].mean()))
+    W = d[list(weather)].values.astype(np.float32) if weather else None
+    model = make_model(float(target[train_rows].mean()), n_weather=len(weather))
+    if weather:                       # 표준화는 공부하는 사진으로만
+        model.mu.copy_(torch.from_numpy(W[train_rows].mean(0)))
+        model.sd.copy_(torch.from_numpy(W[train_rows].std(0).clip(1e-6)))
     opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     steps = len(train_rows) // BATCH
     total = EPOCHS * steps
@@ -244,7 +273,7 @@ def train(arr, d, train_rows, log, label, eval_rows=None, stop=None):
             rows = order[i * BATCH:(i + 1) * BATCH]
             x = augment(batch(arr, rows))
             with torch.autocast("cuda", dtype=torch.bfloat16):
-                out = model(x).squeeze(1).float()
+                out = forward(model, x, W, rows).squeeze(1).float()
             loss = F.l1_loss(out, torch.from_numpy(target[rows]).to(DEV))
             opt.zero_grad(set_to_none=True)
             loss.backward()
@@ -253,7 +282,7 @@ def train(arr, d, train_rows, log, label, eval_rows=None, stop=None):
             loss_sum += loss.detach()
         msg = f"  [{label}] {ep:2}바퀴 학습 손실 {loss_sum.item() / steps:.3f}"
         if eval_rows is not None:
-            preds.append(predict(model, arr, eval_rows, log))
+            preds.append(predict(model, arr, eval_rows, log, W))
             err, inc = np.abs(preds[-1] - y[eval_rows]), d.city.values[eval_rows] == "inc"
             msg += f"  연습시험 MAE 인천 {err[inc].mean():.2f} 베이징 {err[~inc].mean():.2f}"
         print(f"{msg}  ({time.time() - t0:.0f}초)", flush=True)
@@ -276,9 +305,13 @@ def inputs(d, kind):
     return {f: arr for f in ("0", "1", "2", "all")}
 
 
-def run(d, arrs, version, kind):
+def run_name(version, kind, weather):
+    return f"{version}_{kind}" + (f"_w-{'+'.join(SHORT[c] for c in weather)}" if weather else "")
+
+
+def run(d, arrs, version, kind, weather=()):
     use_bj, log = VERSIONS[version]
-    out = OUT / f"{version}_{kind}"
+    out = OUT / run_name(version, kind, weather)
     out.mkdir(parents=True, exist_ok=True)
     inc = d[(d.city == "inc") & (d.part != "A")]
     bj = d[(d.city == "bj") & (d.part != "B")]
@@ -290,7 +323,7 @@ def run(d, arrs, version, kind):
     for f in ("0", "1", "2"):
         val = ev.part.isin([f"f{f}", f"b{f}"]).values
         learn = ev[~val & ((ev.city == "inc") | use_bj).values]
-        _, preds = train(arrs[f], d, learn.index.values, log, f"묶음 {f}", eval_rows=ev.index[val].values)
+        _, preds = train(arrs[f], d, learn.index.values, log, f"묶음 {f}", eval_rows=ev.index[val].values, weather=weather)
         P[:, val] = np.array(preds)
     ev = ev.reset_index(drop=True)
     is_inc = (ev.city == "inc").values
@@ -311,9 +344,9 @@ def run(d, arrs, version, kind):
 
     learn = pd.concat([inc, bj]) if use_bj else inc
     print(f"\n[최종 모델] 인천 개발 {inc.day.nunique()}일{f' + 베이징 학습 {bj.day.nunique()}일' if use_bj else ''}로 {best}바퀴")
-    model, _ = train(arrs["all"], d, learn.index.values, log, "최종", stop=best)
+    model, _ = train(arrs["all"], d, learn.index.values, log, "최종", stop=best, weather=weather)
     torch.save(model.state_dict(), out / "model.pt")
-    info = {"version": version, "input": kind, "model": NAME, "beijing_train": use_bj, "log_target": log, "best_epoch": best,
+    info = {"version": version, "input": kind, "weather": list(weather), "model": NAME, "beijing_train": use_bj, "log_target": log, "best_epoch": best,
             "cv": table.loc[best].round(3).to_dict(), "train_photos": int(len(learn)),
             "batch": BATCH, "lr": LR, "max_epochs": EPOCHS, "minutes": round((time.time() - t_start) / 60, 1),
             "finished": datetime.now().isoformat(timespec="seconds")}
@@ -329,11 +362,13 @@ def test(d):
     for r in runs:
         info = json.loads((r / "info.json").read_text(encoding="utf-8"))
         arr = inputs(d, info["input"])["all"]
-        model = make_model(pretrained=False)
+        weather = info.get("weather", [])
+        model = make_model(pretrained=False, n_weather=len(weather))
         model.load_state_dict(torch.load(r / "model.pt", map_location=DEV))
+        W = d[weather].values.astype(np.float32) if weather else None
         for sheet in ("A", "B"):
             part = d[d.part == sheet]
-            p = predict(model, arr, part.index.values, info["log_target"])
+            p = predict(model, arr, part.index.values, info["log_target"], W)
             rows[(r.name, sheet)] = scores(part.reset_index(drop=True), p)
             preds.append(part[["image", "camera_id", "captured_at", "pm_time", "pm25"]].assign(run=r.name, sheet=sheet, pred=p.round(2)))
     t = pd.DataFrame(rows).T
@@ -349,10 +384,14 @@ def main():
     ap.add_argument("--version", choices=list(VERSIONS), help="incheon: 인천만, incheon_log: 인천만·로그, mixed: 인천+베이징·로그")
     ap.add_argument("--input", choices=list(INPUTS), default="masked",
                     help="; ".join(f"{k}: {v}" for k, v in INPUTS.items()).replace("%", "%%") + " (기본 masked)")
+    ap.add_argument("--weather", nargs="*", choices=WEATHER, default=[],
+                    help="사진 특징 옆에 붙일 기상 칸 (예: --weather humidity sun_alt). 안 주면 사진만")
+    ap.add_argument("--epochs", type=int, default=EPOCHS, help=f"최대 바퀴 수 (기본 {EPOCHS}). 1단계 최고점이 10~13바퀴라 ROI 단계부터 12")
     ap.add_argument("--test", action="store_true", help="저장된 최종 모델을 시험지 A·B로 채점 (모든 작업이 끝난 뒤 한 번만)")
     args = ap.parse_args()
     if not args.test and not args.version:
         ap.error("--version 또는 --test 를 주세요")
+    globals()["EPOCHS"] = args.epochs
 
     # 메모리가 넘치면 Windows는 오류 대신 PC 메모리를 빌려 수십 배 느려진다. 그 전에 오류가 나게 상한을 둔다
     torch.cuda.set_per_process_memory_fraction(0.8)
@@ -361,8 +400,8 @@ def main():
     if args.test:
         test(d)
     else:
-        print(f"입력: {args.input} — {INPUTS[args.input]}")
-        run(d, inputs(d, args.input), args.version, args.input)
+        print(f"입력: {args.input} — {INPUTS[args.input]}{', 기상: ' + ' '.join(args.weather) if args.weather else ''}, 최대 {EPOCHS}바퀴")
+        run(d, inputs(d, args.input), args.version, args.input, tuple(args.weather))
 
 
 if __name__ == "__main__":

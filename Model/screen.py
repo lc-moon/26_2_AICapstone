@@ -48,9 +48,10 @@ def features(d, kind):
     return f
 
 
-def evaluate(d, f, version):
-    """f: 특징 (사진 × 768). ⑥ 자동처럼 회차마다 입력이 다르면 {회차: 특징}"""
+def evaluate(d, f, version, weather=()):
+    """f: 특징 (사진 × 768). ⑥ 자동처럼 회차마다 입력이 다르면 {회차: 특징}. weather를 주면 기상 칸을 특징 옆에 붙인다"""
     use_bj, log = cnn.VERSIONS[version]
+    W = d[list(weather)].values if weather else None
     inc = d[(d.city == "inc") & (d.part != "A")]
     bj = d[(d.city == "bj") & (d.part != "B")]
     ev = pd.concat([inc, bj])
@@ -58,6 +59,8 @@ def evaluate(d, f, version):
     pred = pd.Series(np.nan, index=ev.index)
     for k in ("0", "1", "2"):
         F = f[k] if isinstance(f, dict) else f
+        if W is not None:
+            F = np.hstack([F, W])
         val = ev.part.isin([f"f{k}", f"b{k}"])
         learn = ev[~val & ((ev.city == "inc") | use_bj)]
         t = np.log1p(y[learn.index]) if log else y[learn.index]
@@ -74,16 +77,21 @@ def main():
     ap = argparse.ArgumentParser(description="사전학습 특징 + Ridge로 CNN 입력 후보 거르기")
     ap.add_argument("--inputs", nargs="+", choices=list(cnn.INPUTS), default=list(cnn.INPUTS))
     ap.add_argument("--versions", nargs="+", choices=list(cnn.VERSIONS), default=["incheon_log", "mixed"])
+    ap.add_argument("--weather", nargs="+", action="append", choices=cnn.WEATHER, default=[],
+                    help="기상 조합 후보. 여러 번 주면 조합마다 채점 (예: --weather humidity --weather humidity sun_alt). 안 주면 사진만")
     args = ap.parse_args()
+    combos = [()] + [tuple(w) for w in args.weather] if args.weather else [()]
     torch.cuda.set_per_process_memory_fraction(0.8)
     d = cnn.load()
     rows = []
     for kind in args.inputs:
         f = {k: features(d, f"auto{k}") for k in ("0", "1", "2")} if kind == "auto" else features(d, kind)
-        for v in args.versions:
-            r = evaluate(d, f, v)
-            rows.append({"입력": kind, "설명": cnn.INPUTS[kind], "버전": v, **{k: round(x, 3) for k, x in r.items()}})
-            print(f"  {kind:7} {v:12} 인천 {r['인천MAE']:.2f}  베이징 {r['베이징MAE']:.2f}", flush=True)
+        for w in combos:
+            name = kind + (f"+{'+'.join(cnn.SHORT[c] for c in w)}" if w else "")
+            for v in args.versions:
+                r = evaluate(d, f, v, w)
+                rows.append({"입력": name, "설명": cnn.INPUTS[kind], "기상": " ".join(w), "버전": v, **{k: round(x, 3) for k, x in r.items()}})
+                print(f"  {name:16} {v:12} 인천 {r['인천MAE']:.2f}  베이징 {r['베이징MAE']:.2f}", flush=True)
     t = pd.DataFrame(rows)
     t.to_csv(OUT, index=False, encoding="utf-8-sig")
     print("\n" + t.pivot(index="입력", columns="버전", values=["인천MAE", "베이징MAE"]).round(2).to_string())
