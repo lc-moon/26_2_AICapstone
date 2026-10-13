@@ -184,6 +184,7 @@ python Model\baseline.py --test   시험 A 점수. 모델을 다 고른 뒤에�
 python Model\cnn.py --version incheon   CNN 인천 ver — 연습시험(3묶음×최대 15바퀴)으로 바퀴 수를 정하고 최종 모델 저장
 python Model\cnn.py --version incheon_log   CNN 인천 ver을 로그로 학습 (로그 효과 확인용)
 python Model\cnn.py --version mixed     CNN 인천+베이징 ver — 베이징 학습 날짜를 섞는다
+python Model\cnn.py --version mixed --input top60 --weather humidity --final-only --seed 1   연습시험은 두고 최종 모델만 다시 (시험지 열기 전에만)
 python Model\cnn.py --test              저장된 CNN 전부를 시험지 A(인천)·B(베이징)로 채점. 모든 작업이 끝난 뒤 한 번만
 python Model\run_queue.py "--version incheon_log" "--version mixed"   여러 개를 이어서 (기록: data\model\cnn\run_log.txt)
 python Model\text_mask.py               글자 자리 다시 찾기 (새 카메라·해상도가 생겼을 때) → data\review\text_mask_*.jpg로 확인

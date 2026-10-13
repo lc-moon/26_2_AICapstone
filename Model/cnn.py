@@ -5,6 +5,7 @@
 #   python Model/cnn.py --version mixed          인천+베이징 ver. 베이징 학습 날짜를 섞고 log(1+PM2.5)를 배운다
 #   python Model/cnn.py --version mixed --input sky    입력 종류 (기본 masked = 사진 전체 + 글자 가림). INPUTS 참고
 #   python Model/cnn.py --version mixed --input sky --weather humidity sun_alt --epochs 12   기상을 사진 특징 옆에 붙임
+#   python Model/cnn.py --version mixed --input top60 --weather humidity --final-only --seed 1   최종 모델만 다시 (시험지 열기 전에만)
 #   python Model/cnn.py --test                   저장된 최종 모델 전부를 시험지 A(인천)·B(베이징)로 채점. 모든 작업이 끝난 뒤 한 번만
 #   여러 개를 이어서 돌릴 때는 Model/run_queue.py
 #
@@ -250,12 +251,12 @@ def predict(model, arr, rows, log, W=None):
     return np.expm1(p) if log else p
 
 
-def train(arr, d, train_rows, log, label, eval_rows=None, stop=None, weather=()):
+def train(arr, d, train_rows, log, label, eval_rows=None, stop=None, weather=(), seed=SEED):
     """train_rows로 EPOCHS바퀴 일정(1바퀴 준비 + 코사인 감소)을 따라 학습한다.
     eval_rows가 있으면 매 바퀴 그 사진들의 예측(원래 농도)을 모아 돌려주고, stop이 있으면 그 바퀴에서 멈춘다.
     weather에 기상 칸 이름을 주면 사진 특징 옆에 붙여 함께 배운다"""
-    torch.manual_seed(SEED)
-    rng = np.random.default_rng(SEED)
+    torch.manual_seed(seed)
+    rng = np.random.default_rng(seed)
     y = d.pm25.values.astype(np.float32)
     target = np.log1p(y) if log else y
     W = d[list(weather)].values.astype(np.float32) if weather else None
@@ -358,6 +359,23 @@ def run(d, arrs, version, kind, weather=()):
     print(f"저장: {out} ({info['minutes']}분)")
 
 
+def refinal(d, arrs, version, kind, weather, seed):
+    """연습시험(점수·고른 바퀴)은 그대로 두고 최종 모델만 다시 만든다. 최종 모델 학습이 불안정했을 때 시험지를 열기 전에만 쓴다.
+    같은 출발점이면 같은 흔들림이 되풀이될 수 있어 seed를 바꾼다 (2026-10-13, mixed_top60 기상 4개 최종 모델 손실 0.28)"""
+    use_bj, log = VERSIONS[version]
+    out = OUT / run_name(version, kind, weather)
+    info = json.loads((out / "info.json").read_text(encoding="utf-8"))
+    globals()["EPOCHS"] = info["max_epochs"]          # 학습률 일정이 최대 바퀴 수에 맞춰져 있어 연습시험 때와 같게
+    inc = d[(d.city == "inc") & (d.part != "A")]
+    learn = pd.concat([inc, d[(d.city == "bj") & (d.part != "B")]]) if use_bj else inc
+    print(f"\n[최종 모델 다시] {info['best_epoch']}바퀴, 최대 {EPOCHS}바퀴 일정, seed {seed}")
+    model, _ = train(arrs["all"], d, learn.index.values, log, "최종", stop=info["best_epoch"], weather=weather, seed=seed)
+    torch.save(model.state_dict(), out / "model.pt")
+    info.update(final_seed=seed, final_redone=datetime.now().isoformat(timespec="seconds"))
+    (out / "info.json").write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"저장: {out}")
+
+
 def test(d):
     runs = sorted(p.parent for p in OUT.glob("*/model.pt"))
     if not runs:
@@ -392,6 +410,8 @@ def main():
                     help="사진 특징 옆에 붙일 기상 칸 (예: --weather humidity sun_alt). 안 주면 사진만")
     ap.add_argument("--epochs", type=int, default=EPOCHS, help=f"최대 바퀴 수 (기본 {EPOCHS}). 1단계 최고점이 10~13바퀴라 ROI 단계부터 12")
     ap.add_argument("--test", action="store_true", help="저장된 최종 모델을 시험지 A·B로 채점 (모든 작업이 끝난 뒤 한 번만)")
+    ap.add_argument("--final-only", action="store_true", help="연습시험은 그대로 두고 최종 모델만 다시 학습 (시험지 열기 전에만)")
+    ap.add_argument("--seed", type=int, default=SEED, help=f"--final-only의 출발점 번호 (기본 {SEED})")
     args = ap.parse_args()
     if not args.test and not args.version:
         ap.error("--version 또는 --test 를 주세요")
@@ -403,6 +423,8 @@ def main():
     d = load()
     if args.test:
         test(d)
+    elif args.final_only:
+        refinal(d, inputs(d, args.input), args.version, args.input, tuple(args.weather), args.seed)
     else:
         print(f"입력: {args.input} — {INPUTS[args.input]}{', 기상: ' + ' '.join(args.weather) if args.weather else ''}, 최대 {EPOCHS}바퀴")
         run(d, inputs(d, args.input), args.version, args.input, tuple(args.weather))
