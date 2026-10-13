@@ -65,32 +65,38 @@ def preprocess(path, meta):
 
 
 class Humidity:
-    """관측소·날짜별 1분값을 한 번에 받아 둔다. 실패하면 None (다음 번에 다시)"""
+    """관측소·시간별 1분값을 한 번에 받아 둔다. 실패하면 None (live는 다음 번에 다시).
+    API가 가끔 30초 걸려 빈 응답(머리말만)을 준다(10/13 실측). 특히 아직 오지 않은 분까지 범위에 넣으면 그렇다.
+    그래서 범위를 필요한 분까지만 잡고, 자료 줄이 하나도 없으면 실패로 보고 다시 묻는다"""
 
     def __init__(self, key):
         self.key, self.cache = key, {}
 
     def get(self, stn, t):
-        k = (stn, t.strftime("%Y%m%d%H"))
-        if k not in self.cache:
+        k, minute = (stn, t.strftime("%Y%m%d%H")), t.strftime("%Y%m%d%H%M")
+        if k not in self.cache or (self.cache[k] is not None and minute not in self.cache[k]):
             t0 = t.replace(minute=0)
+            tm2 = min(t0 + timedelta(minutes=59), datetime.now() - timedelta(minutes=1), max(t, t0))
             rows = None
-            for attempt in range(2):
+            for attempt in range(3):
                 try:
-                    r = requests.get(AWS_MIN, params={"tm1": t0.strftime("%Y%m%d%H%M"), "tm2": (t0 + timedelta(minutes=59)).strftime("%Y%m%d%H%M"),
-                                                      "stn": stn, "disp": "0", "help": "0", "authKey": self.key}, timeout=60)
-                    rows = {}
+                    r = requests.get(AWS_MIN, params={"tm1": t0.strftime("%Y%m%d%H%M"), "tm2": tm2.strftime("%Y%m%d%H%M"),
+                                                      "stn": stn, "disp": "0", "help": "0", "authKey": self.key}, timeout=40)
+                    got = {}
                     for line in r.content.decode("euc-kr", "replace").splitlines():
                         f = line.split()
                         if len(f) >= 15 and f[0][:1].isdigit():
                             hm, re_ = float(f[14]), float(f[9])
-                            rows[f[0]] = (hm if hm > -50 else None, re_ if re_ > -50 else None)
-                    break
+                            got[f[0]] = (hm if hm > -50 else None, re_ if re_ > -50 else None)
+                    if got:
+                        rows = got
+                        break
                 except requests.RequestException:
-                    time.sleep(5)
+                    pass
+                time.sleep(5)
             self.cache[k] = rows
         rows = self.cache[k]
-        return None if rows is None else rows.get(t.strftime("%Y%m%d%H%M"), (None, None))
+        return None if rows is None else rows.get(minute, (None, None))
 
 
 def read_log():
