@@ -11,6 +11,7 @@
 #
 # 학습과 같게 (Model/cnn.py _resized·batch): 글자 자리를 평균색으로 칠하고 → 위쪽 60% 자르고 → 384×384 INTER_AREA → RGB → 표준화.
 # 습도는 학습 때와 같은 관측소(stations.json)의 사진 찍은 '분'의 1분값. 시각이 맞지 않는 값으로 메우지 않는다(현황 §2).
+# 습도는 아래 거르기에 늘 쓰고, 모델 입력으로는 모델이 받을 때(.json의 weather)만 넣는다.
 # 학습에서 뺀 조건(강수 감지, 습도 95% 이상)은 추정하지 않고 사유를 남긴다. 밤은 수집기가 이미 건너뛴다
 import argparse
 import csv
@@ -30,7 +31,8 @@ LOG = ROOT / "data/logs/capture_log.csv"
 IMAGES = ROOT / "data/images"
 MASKS = ROOT / "Model/text_mask"
 STATIONS = Path(__file__).with_name("stations.json")
-MODEL = "mixed_top60_w-hum"                     # 인천+베이징 ver 최종 (⑤ 위쪽 60% + 습도, 2026-10-13)
+MODEL = "incheon_log_top60"                     # 인천 ver 최종 (⑤ 위쪽 60%, 기상 없음). 2026-10-15 인천+베이징 ver(mixed_top60_w-hum)에서 교체
+                                                # — 인천에서는 인천 ver가 같거나 낫고, 베이징 학습의 이점이 인천 고농도에서 확인되지 않음(현황 §7)
 ONNX_DIR = ROOT / "data/model/onnx"
 OUT = ROOT / "data/estimates"
 AWS_MIN = "https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min"
@@ -172,7 +174,10 @@ def estimate(todo, mode, key):
         if x is None:
             out.append({**row, "status": "사진 읽기 실패"})
             continue
-        y = sess.run(None, {"image": x, "weather": np.array([[v[0]]], dtype=np.float32)})[0][0, 0]
+        feeds = {"image": x}
+        if meta["weather"]:                            # 습도를 입력으로 받는 모델만. 95% 거르기는 위에서 모델과 상관없이 한다
+            feeds["weather"] = np.array([[v[0]]], dtype=np.float32)
+        y = sess.run(None, feeds)[0][0, 0]
         pm = max(0.0, float(np.expm1(y) if meta["log_target"] else y))
         out.append({**row, "pm25_est": f"{pm:.1f}", "status": "정상" if "없음" not in scene else "정상(글자 가림 없음)"})
     return out

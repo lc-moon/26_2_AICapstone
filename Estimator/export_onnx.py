@@ -1,6 +1,7 @@
 # 학습한 최종 모델(model.pt)을 VM에서 가볍게 돌릴 ONNX 파일로 바꾸고, 같은 입력에서 PyTorch와 결과가 같은지 확인한다. 로컬(PC)에서 실행.
 #
 #   python Estimator/export_onnx.py                       mixed_top60_w-hum (인천+베이징 ver 최종) → data/model/onnx/
+#   (추정기는 10/15부터 인천 ver incheon_log_top60을 쓴다)
 #   python Estimator/export_onnx.py --run incheon_log_top60
 #
 # 결과: data/model/onnx/{run}.onnx  입력 image (N,3,384,384 표준화한 RGB), humidity (N,1, %) → 출력 log(1+PM2.5)
