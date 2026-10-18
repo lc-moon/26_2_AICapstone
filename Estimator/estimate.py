@@ -13,6 +13,8 @@
 # 습도는 학습 때와 같은 관측소(stations.json)의 사진 찍은 '분'의 1분값. 시각이 맞지 않는 값으로 메우지 않는다(현황 §2).
 # 습도는 아래 거르기에 늘 쓰고, 모델 입력으로는 모델이 받을 때(.json의 weather)만 넣는다.
 # 학습에서 뺀 조건(강수 감지, 습도 95% 이상)은 추정하지 않고 사유를 남긴다. 밤은 수집기가 이미 건너뛴다
+# 강수 감지(RE)는 당일에는 결측(-99.9)이고 다음 날쯤 채워진다(10/18 확인). 그래서 RE가 없으면 60분 강수량 > 0으로 대신 거른다.
+# 학습 때 RE로 뺀 사진 229장 중 60분 강수량 > 0은 185장(81%), 15분 강수량 > 0은 117장(51%)이라 60분을 쓴다(현황 §7)
 import argparse
 import csv
 import html
@@ -88,8 +90,8 @@ class Humidity:
                     for line in r.content.decode("euc-kr", "replace").splitlines():
                         f = line.split()
                         if len(f) >= 15 and f[0][:1].isdigit():
-                            hm, re_ = float(f[14]), float(f[9])
-                            got[f[0]] = (hm if hm > -50 else None, re_ if re_ > -50 else None)
+                            hm, re_, rn60 = float(f[14]), float(f[9]), float(f[11])
+                            got[f[0]] = (hm if hm > -50 else None, re_ if re_ > -50 else None, rn60 if rn60 > -50 else None)
                     if got:
                         rows = got
                         break
@@ -98,7 +100,7 @@ class Humidity:
                 time.sleep(5)
             self.cache[k] = rows
         rows = self.cache[k]
-        return None if rows is None else rows.get(minute, (None, None))
+        return None if rows is None else rows.get(minute, (None, None, None))
 
 
 def read_log():
@@ -157,15 +159,20 @@ def estimate(todo, mode, key):
         row = {"captured_at": r["captured_at"], "camera_id": r["cctv_id"], "name": r["name"], "image": r["file_name"],
                "humidity": "", "rain": "", "pm25_est": "", "mode": mode, "estimated_at": now.strftime("%Y-%m-%d %H:%M:%S")}
         stn = stations.get(r["cctv_id"])
-        v = hum.get(stn, t) if stn else (None, None)
+        v = hum.get(stn, t) if stn else (None, None, None)
         if v is None or v[0] is None:
             if mode == "live" and now - t < timedelta(minutes=GIVE_UP_MIN):
                 continue                                   # 아직 안 올라왔거나 조회 실패 → 다음 번에 다시
             out.append({**row, "status": "습도 결측"})
             continue
-        row["humidity"], row["rain"] = v[0], "" if v[1] is None else int(v[1])
+        # rain 칸: RE가 있으면 0/1, 없으면 60분 강수량(예: "60분 21.5mm")
+        row["humidity"] = v[0]
+        row["rain"] = int(v[1]) if v[1] is not None else ("" if v[2] is None else f"60분 {v[2]}mm")
         if v[1] == 1:
             out.append({**row, "status": "강수 감지 — 추정 안 함"})
+            continue
+        if v[1] is None and v[2] is not None and v[2] > 0:
+            out.append({**row, "status": "강수량 감지 — 추정 안 함"})
             continue
         if v[0] >= HUMIDITY_MAX:
             out.append({**row, "status": f"습도 {HUMIDITY_MAX}% 이상 — 추정 안 함"})
