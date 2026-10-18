@@ -68,7 +68,7 @@ INSERT INTO model_versions (model, deployed_at, cv_mae, test_mae, note) VALUES
 
 README = """# shared — 공통 자료
 
-A(백엔드)·B(프론트)가 같이 쓰는 파일입니다. 규칙과 할 일은 Notion 역할 분배 가이드를 보세요.
+A(백엔드)·B(프론트)가 같이 쓰는 파일입니다. 규칙과 할 일은 [AGENTS.md](../AGENTS.md) 또는 [Notion 가이드](https://app.notion.com/p/A-B-3fd4a3212e4f81458cd8f40cff41cad5)를 보세요.
 팀장 저장소의 `Tools/make_service_shared.py`가 만든 것이라 **직접 고치지 말고** 필요하면 팀장에게 말해 주세요.
 
 | 파일 | 내용 |
@@ -79,7 +79,7 @@ A(백엔드)·B(프론트)가 같이 쓰는 파일입니다. 규칙과 할 일�
 | `cameras.json` | 카메라 20대. `grid_id`가 null인 103번(강화)은 화면 범위 밖이지만 보간 입력으로는 쓴다 |
 | `stations.json` | 인천과 인접 경기·서울의 도시대기 측정소. `use_for_compare`는 인천 내륙 안에 있는 곳 |
 | `mock/` | API 응답 예시 (아래) |
-| `mockup/` | 목표 화면 시안. `index.html`을 더블클릭하면 열림 (인터넷 필요) |
+| `mockup/` | 참고용 화면 시안. `index.html`을 더블클릭하면 열림 (인터넷 필요) |
 
 ## mock/
 
