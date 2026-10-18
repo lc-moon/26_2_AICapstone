@@ -25,6 +25,7 @@ C:\26_2_AICapstone\
 ├─ .env                 인증키 (공유·업로드 금지)
 │
 ├─ .claude\             Claude Code 설정
+│  ├─ launch.json         미리보기 서버 (시안을 localhost:8765로 띄움)
 │  └─ skills\기록\      작업 기록 작성 스킬 (/기록)
 │
 ├─ docs\                문서
@@ -47,6 +48,7 @@ C:\26_2_AICapstone\
 │  ├─ build_labels_beijing.py  베이징 외부 데이터를 같은 양식의 표로 (사진 회전·축소 포함)
 │  ├─ contact_sheet.py         수집 이미지를 한 장으로 붙여 보기
 │  ├─ make_prototype_data.py   조원에게 넘길 모델 출력 샘플 생성
+│  ├─ make_mockup_boundary.py  서비스 시안이 쓰는 인천 내륙 경계 생성 → Web\mockup\
 │  ├─ fetch_songui.py          에어코리아 PM2.5 조회
 │  └─ analyze_songui.py        PM2.5 등급 분포 분석
 │
@@ -79,6 +81,12 @@ C:\26_2_AICapstone\
 │  ├─ install_service.sh   수집기 systemd 서비스 등록 (docs/운영.md 참고)
 │  └─ install_estimator.sh 추정기 5분 타이머 + 결과 페이지(127.0.0.1:8080) 등록
 │
+├─ Web\
+│  └─ mockup\             서비스 화면 시안 (docs/서비스_구상.md). index.html 더블클릭으로 열림
+│     ├─ index.html          지도·구름·클릭 패널
+│     ├─ incheon_inland.js   인천 내륙 경계 (make_mockup_boundary.py가 생성)
+│     └─ sample.js           10/16 13:20 실제 추정값과 측정소 위치
+│
 ├─ model_output\        조원에게 넘기는 데이터 (git 포함)
 │  ├─ cameras.json         카메라 번호·이름·좌표
 │  └─ values.json          시각별 추정 농도
@@ -89,6 +97,7 @@ C:\26_2_AICapstone\
 │  ├─ labels\              학습용 표(labels.csv, 베이징은 labels_beijing.csv)와 API 원본 응답 — raw\airkorea\는 지우지 말 것
 │  ├─ contact_sheets\      이미지 확인용 모아보기
 │  ├─ model\               이미지 특징(features.csv)·베이스라인 사진별 예측(baseline_pred.csv)·CNN 결과(cnn\, 설계가 바뀌기 전 결과는 cnn_archive\)·384로 줄인 사진(cnn_cache\, 7GB)
+│  ├─ mockup\              시안 경계 원본(통계청 2013 시군구, 55MB)
 │  ├─ screening\           화각 스크리닝 산출물
 │  └─ songui_pm25\         PM2.5 원본·정제·차트
 │
@@ -165,6 +174,14 @@ python Tools\contact_sheet.py --date 2026-09-28 --camera 113    그 카메라의
 ### `make_prototype_data.py` — 조원에게 넘길 샘플 생성
 `model_output\`의 두 파일을 만듭니다. 카메라 번호·이름·좌표는 실제 값이고 농도만 가상입니다.
 형식은 `docs/인터페이스_모델출력.md` 참고.
+
+### `make_mockup_boundary.py` — 서비스 시안용 인천 내륙 경계
+통계청 2013 시군구 경계에서 인천 내륙 + 송도만 골라 `Web\mockup\incheon_inland.js`를 만듭니다.
+원본(약 55MB)은 처음 한 번 `data\mockup\`에 받습니다. 2013 경계라 송도 매립지 일부가 빠져 있어 실서비스에는 최신 경계가 필요합니다.
+
+```
+python Tools\make_mockup_boundary.py
+```
 
 ### `fetch_songui.py` / `analyze_songui.py` — PM2.5 라벨 분석
 에어코리아에서 측정소 데이터를 받아 농도 등급 분포를 집계합니다.

@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>인천 초미세먼지 지도 (시안)</title>
+<!--
+  서비스 화면 시안. 기획은 docs/서비스_구상.md §3.
+  index.html을 더블클릭하면 열린다 (지도 배경을 받으려면 인터넷 필요).
+  - 지도: MapLibre GL JS + OpenFreeMap Liberty
+  - 농도: 카메라 추정값을 거리 제곱 역수(IDW)로 이어 칠한 뒤 흐리게 → 격자는 보이지 않는다
+  - 범위: 인천 내륙 + 송도 (incheon_inland.js). 범위 밖은 라벨까지 가리고, 클릭되지 않는다
+  - 데이터: sample.js (10/16 13:20 실제 추정값). 측정소 실측값은 예시
+-->
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="incheon_inland.js"></script>
+<script src="sample.js"></script>
+<style>
+  html, body { margin: 0; height: 100%; font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif; color: #1d2733; }
+  #map { position: fixed; inset: 0; }
+  .card { position: fixed; background: rgba(255,255,255,.92); backdrop-filter: blur(8px); border-radius: 14px; box-shadow: 0 4px 18px rgba(20,30,45,.14); }
+  #title { top: 18px; left: 18px; padding: 14px 18px; }
+  #title b { display: block; font-size: 17px; }
+  #title span { display: block; font-size: 13px; color: #566372; margin-top: 4px; }
+  #legend { bottom: 24px; left: 18px; padding: 10px 14px; display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: #3a4654; }
+  #legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  #legend small { color: #7a8592; margin-left: 2px; }
+  #hint { bottom: 24px; left: 50%; transform: translateX(-50%); padding: 9px 16px; font-size: 13px; }
+  #toast { bottom: 70px; left: 50%; transform: translateX(-50%); padding: 8px 14px; font-size: 12.5px; }
+  #tag { position: fixed; top: 18px; right: 18px; font-size: 11px; background: #1d2733; color: #fff; padding: 5px 9px; border-radius: 6px; opacity: .75; }
+  #panel { top: 18px; right: 18px; width: 300px; padding: 18px 20px; }
+  #panel .place { font-size: 13px; color: #566372; }
+  #panel .num { font-size: 44px; font-weight: 700; margin-top: 6px; font-variant-numeric: tabular-nums; }
+  #panel .num small { font-size: 15px; font-weight: 500; color: #566372; margin-left: 4px; }
+  #panel .badge { display: inline-block; padding: 3px 10px; border-radius: 99px; font-size: 13px; font-weight: 600; margin-top: 6px; color: #1d2733; }
+  #panel .meta { font-size: 12px; color: #6a7683; margin-top: 8px; line-height: 1.5; }
+  #panel hr { border: 0; border-top: 1px solid #e3e7ec; margin: 14px 0; }
+  #panel .row { display: flex; justify-content: space-between; align-items: baseline; font-size: 13px; }
+  #panel .row b { font-size: 18px; font-variant-numeric: tabular-nums; }
+  #panel .note { font-size: 11.5px; color: #7a8592; margin-top: 10px; line-height: 1.5; }
+  #panel button { margin-top: 14px; width: 100%; padding: 9px; border: 1px solid #d5dbe2; background: #fff; border-radius: 9px; font-size: 13px; cursor: pointer; }
+  .maplibregl-ctrl-attrib { font-size: 10.5px; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="title" class="card"><b>인천 초미세먼지 지도</b><span id="time"></span><span>CCTV 영상으로 추정한 값입니다</span></div>
+<div id="legend" class="card"></div>
+<div id="hint" class="card">궁금한 곳을 눌러 보세요</div>
+<div id="toast" class="card" hidden>인천 내륙만 볼 수 있어요</div>
+<div id="tag">시안 · 10/16 13:20 실제 추정값</div>
+<div id="panel" class="card" hidden></div>
+
+<script>
+// ───────── 등급과 색 ─────────
+// 환경부 PM2.5 기준. 색은 에어코리아식 4색을 파스텔톤으로, 같은 등급 안에서 농도에 따라 명암을 준다
+const GRADES = [
+  { max: 15, name: "좋음",     range: "0–15",  light: [200, 226, 252], dark: [128, 176, 236] },
+  { max: 35, name: "보통",     range: "16–35", light: [196, 234, 196], dark: [118, 196, 140] },
+  { max: 75, name: "나쁨",     range: "36–75", light: [255, 226, 165], dark: [244, 176, 100] },
+  { max: 150, name: "매우나쁨", range: "76~",   light: [246, 170, 170], dark: [214, 100, 112] },
+];
+const gradeOf = v => GRADES.find(g => Math.round(v) <= g.max) || GRADES[3];
+function colorOf(v) {
+  const i = GRADES.indexOf(gradeOf(v)), g = GRADES[i];
+  const lo = i ? GRADES[i - 1].max : 0, t = Math.min(1, Math.max(0, (v - lo) / (g.max - lo)));
+  return g.light.map((x, k) => Math.round(x + (g.dark[k] - x) * t));
+}
+const rgb = c => `rgb(${c.join(",")})`;
+
+// ───────── 보간 ─────────
+const KX = 111.32 * Math.cos(37.45 * Math.PI / 180), KY = 110.57;   // 도 → km
+const km = (a, b) => Math.hypot((a[0] - b[0]) * KX, (a[1] - b[1]) * KY);
+function idw(p) {
+  let s = 0, w = 0;
+  for (const c of SAMPLE.cameras) {
+    const d = km(p, [c.lon, c.lat]), ww = 1 / (d * d + 0.05);
+    s += ww * c.pm25; w += ww;
+  }
+  return s / w;
+}
+
+// ───────── 범위 판정 ─────────
+function inRing(p, r) {
+  let c = false;
+  for (let i = 0, j = r.length - 1; i < r.length; j = i++) {
+    const [xi, yi] = r[i], [xj, yj] = r[j];
+    if ((yi > p[1]) !== (yj > p[1]) && p[0] < (xj - xi) * (p[1] - yi) / (yj - yi) + xi) c = !c;
+  }
+  return c;
+}
+const guAt = p => { const i = INCHEON.rings.findIndex(r => inRing(p, r)); return i < 0 ? null : INCHEON.gu[i]; };
+const MASK = { type: "MultiPolygon", coordinates: INCHEON.rings.map(r => [r]) };
+let x0 = 180, y0 = 90, x1 = -180, y1 = -90;
+for (const r of INCHEON.rings) for (const [x, y] of r) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+const BOUNDS = [[x0, y0], [x1, y1]];
+
+// ───────── 구름 이미지: 픽셀마다 IDW → 색 → 흐리게 → 인천 내륙 모양으로 자르기 ─────────
+function cloudImage() {
+  const pad = 0.03, L0 = x0 - pad, L1 = x1 + pad, B0 = y0 - pad, B1 = y1 + pad;
+  const my = lat => Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360));   // 메르카토르 y
+  const iy = y => Math.atan(Math.sinh(y)) * 180 / Math.PI;
+  const W = 900, H = Math.round(W * (my(B1) - my(B0)) / ((L1 - L0) * Math.PI / 180));
+  const canvas = n => { const c = document.createElement("canvas"); c.width = W; c.height = H; return c; };
+
+  const raw = canvas(), img = raw.getContext("2d").createImageData(W, H);
+  for (let j = 0; j < H; j++) {
+    const lat = iy(my(B1) - (j + .5) / H * (my(B1) - my(B0)));
+    for (let i = 0; i < W; i++) {
+      const c = colorOf(idw([L0 + (i + .5) / W * (L1 - L0), lat])), k = (j * W + i) * 4;
+      img.data[k] = c[0]; img.data[k + 1] = c[1]; img.data[k + 2] = c[2]; img.data[k + 3] = 170;
+    }
+  }
+  raw.getContext("2d").putImageData(img, 0, 0);
+
+  const out = canvas(), ctx = out.getContext("2d");
+  ctx.filter = "blur(22px)"; ctx.drawImage(raw, 0, 0);
+  const mask = canvas(), mc = mask.getContext("2d");
+  const px = ([lon, lat]) => [(lon - L0) / (L1 - L0) * W, (my(B1) - my(lat)) / (my(B1) - my(B0)) * H];
+  mc.filter = "blur(14px)"; mc.beginPath();
+  for (const r of INCHEON.rings) { r.forEach((c, i) => mc[i ? "lineTo" : "moveTo"](...px(c))); mc.closePath(); }
+  mc.fill();
+  ctx.filter = "none"; ctx.globalCompositeOperation = "destination-in"; ctx.drawImage(mask, 0, 0);
+  return { url: out.toDataURL(), coordinates: [[L0, B1], [L1, B1], [L1, B0], [L0, B0]] };
+}
+
+// ───────── 화면 ─────────
+const t = new Date(SAMPLE.time);
+document.getElementById("time").textContent =
+  `${t.getMonth() + 1}월 ${t.getDate()}일 ${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")} 기준 · 20분마다 갱신`;
+document.getElementById("legend").innerHTML = GRADES.map(g =>
+  `<span><i style="background:${rgb(g.dark)}"></i>${g.name}<small>${g.range}</small></span>`).join("") +
+  `<span style="color:#7a8592">㎍/㎥</span>`;
+
+// 첫 화면: 인천 내륙이 꽉 차게, 살짝 기울여서
+const START = { pitch: 40, bearing: -12 };
+const startCamera = () => {
+  const c = map.cameraForBounds(BOUNDS, { padding: 30 });
+  return { center: c.center, zoom: c.zoom + 0.2, ...START };
+};
+const map = new maplibregl.Map({
+  container: "map",
+  style: "https://tiles.openfreemap.org/styles/liberty",
+  bounds: BOUNDS,
+  maxBounds: [[x0 - 0.25, y0 - 0.15], [x1 + 0.25, y1 + 0.15]],
+  attributionControl: { compact: false, customAttribution: "추정: CCTV(인천교통정보센터) · 실측: 에어코리아" },
+});
+
+map.on("load", () => {
+  map.jumpTo(startCamera());
+  const layers = map.getStyle().layers;
+  // 도로 번호 표지(13;25 같은 숫자)는 빼고, 나머지 글자는 인천 내륙 안의 것만 남긴다
+  for (const l of layers.filter(l => l.type === "symbol")) {
+    if (/shield/.test(l.id)) { map.removeLayer(l.id); continue; }
+    map.setFilter(l.id, l.filter ? ["all", l.filter, ["within", MASK]] : ["within", MASK]);
+  }
+  // 글자 바로 아래(도로·다리·행정경계 위)에 가림막을 깐다
+  const labelsStart = map.getStyle().layers.find((l, i, all) =>
+    l.type === "symbol" && all.slice(i).every(m => m.type === "symbol")).id;
+
+  // 인천 밖 가림막 + 바깥 테두리
+  map.addSource("outside", { type: "geojson", data: { type: "Feature", geometry: {
+    type: "Polygon", coordinates: [[[123, 32], [133, 32], [133, 40], [123, 40], [123, 32]], ...INCHEON.rings] } } });
+  map.addLayer({ id: "outside", type: "fill", source: "outside", paint: { "fill-color": "#f2f3f5", "fill-opacity": 0.88 } }, labelsStart);
+  map.addSource("edge", { type: "geojson", data: { type: "Feature", geometry: { type: "MultiLineString", coordinates: INCHEON.edge } } });
+  map.addLayer({ id: "edge", type: "line", source: "edge", paint: { "line-color": "#8b96a3", "line-width": 1.2, "line-opacity": 0.6 } }, labelsStart);
+
+  // 구름: 3D 건물 아래에 깔고, 확대할수록 옅게
+  map.addSource("cloud", { type: "image", ...cloudImage() });
+  map.addLayer({ id: "cloud", type: "raster", source: "cloud",
+    paint: { "raster-opacity": ["interpolate", ["linear"], ["zoom"], 11, 0.9, 15, 0.55], "raster-fade-duration": 0 } },
+    "building-3d");
+
+  map.addSource("pick", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+  map.addLayer({ id: "pick-halo", type: "circle", source: "pick", paint: { "circle-radius": 22, "circle-color": "#1d2733", "circle-opacity": 0.15 } });
+  map.addLayer({ id: "pick", type: "circle", source: "pick",
+    paint: { "circle-radius": 7, "circle-color": "#1d2733", "circle-stroke-color": "#fff", "circle-stroke-width": 2.5 } });
+});
+
+// ───────── 클릭 ─────────
+const $ = id => document.getElementById(id);
+map.on("click", e => {
+  const p = [e.lngLat.lng, e.lngLat.lat], gu = guAt(p);
+  if (!gu) {
+    $("toast").hidden = false; clearTimeout($("toast").timer);
+    $("toast").timer = setTimeout(() => $("toast").hidden = true, 1600);
+    return;
+  }
+  const v = idw(p), g = gradeOf(v);
+  const cam = Math.min(...SAMPLE.cameras.map(c => km(p, [c.lon, c.lat])));
+  const st = SAMPLE.stations.map(s => ({ ...s, d: km(p, [s.lon, s.lat]) })).sort((a, b) => a.d - b.d)[0];
+  map.getSource("pick").setData({ type: "Feature", geometry: { type: "Point", coordinates: p } });
+  map.flyTo({ center: p, zoom: 15.4, pitch: 60, bearing: map.getBearing() - 15, duration: 2200 });
+  $("hint").hidden = true; $("tag").hidden = true; $("panel").hidden = false;
+  $("panel").innerHTML = `
+    <div class="place">${gu} 부근</div>
+    <div class="num">${Math.round(v)}<small>㎍/㎥</small></div>
+    <span class="badge" style="background:${rgb(g.dark)}">${g.name}</span>
+    <div class="meta">13:20 CCTV 추정 · 가장 가까운 CCTV ${cam.toFixed(1)}km</div>
+    <hr>
+    <div class="row"><span>가까운 측정소 <b style="font-size:13px">${st.name}</b> 실측</span><b>${Math.max(1, Math.round(v) - 2)}</b></div>
+    <div class="meta" style="margin-top:2px">12~13시 평균 · ${st.d.toFixed(1)}km · 예시값</div>
+    <div class="note">CCTV 사진으로 추정한 값이라 측정소 실측과 다를 수 있어요. 측정소 값은 1시간 평균이라 시각이 조금 다릅니다.</div>
+    <button id="back">인천 전체 보기</button>`;
+  $("back").onclick = () => {
+    $("panel").hidden = true; $("hint").hidden = false; $("tag").hidden = false;
+    map.getSource("pick").setData({ type: "FeatureCollection", features: [] });
+    map.flyTo({ ...startCamera(), duration: 1500 });
+  };
+});
+</script>
+</body>
+</html>
