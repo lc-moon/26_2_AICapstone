@@ -99,7 +99,7 @@ C:\26_2_AICapstone\
 │  ├─ labels\              학습용 표(labels.csv, 베이징은 labels_beijing.csv)와 API 원본 응답 — raw\airkorea\는 지우지 말 것
 │  ├─ contact_sheets\      이미지 확인용 모아보기
 │  ├─ model\               이미지 특징(features.csv)·베이스라인 사진별 예측(baseline_pred.csv)·CNN 결과(cnn\, 설계가 바뀌기 전 결과는 cnn_archive\)·384로 줄인 사진(cnn_cache\, 7GB)
-│  ├─ mockup\              시안 경계 원본(통계청 2013 시군구, 55MB)
+│  ├─ mockup\              시안 경계 원본(행정동 경계 2026-10-01판, 35MB)
 │  ├─ screening\           화각 스크리닝 산출물
 │  └─ songui_pm25\         PM2.5 원본·정제·차트
 │
@@ -178,8 +178,9 @@ python Tools\contact_sheet.py --date 2026-09-28 --camera 113    그 카메라의
 형식은 `docs/인터페이스_모델출력.md` 참고.
 
 ### `make_mockup_boundary.py` — 서비스 시안용 인천 내륙 경계
-통계청 2013 시군구 경계에서 인천 내륙 + 송도만 골라 `Web\mockup\incheon_inland.js`를 만듭니다.
-원본(약 55MB)은 처음 한 번 `data\mockup\`에 받습니다. 2013 경계라 송도 매립지 일부가 빠져 있어 실서비스에는 최신 경계가 필요합니다.
+행정동 경계 2026-10-01판(통계청 SGIS 원자료, [vuski/admdongkor](https://github.com/vuski/admdongkor), CC BY 4.0)에서 인천 내륙 + 송도만 골라
+`Web\mockup\incheon_inland.js`를 만듭니다. 2026-07-01 개편 후 구 기준이고 강화·옹진·영종은 뺍니다.
+원본(약 35MB)은 처음 한 번 `data\mockup\`에 받습니다. `shapely`가 필요합니다(`pip install shapely`). 화면에 쓰면 출처를 표기합니다.
 
 ```
 python Tools\make_mockup_boundary.py

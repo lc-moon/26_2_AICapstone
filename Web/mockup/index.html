@@ -19,7 +19,7 @@
 <style>
   html, body { margin: 0; height: 100%; font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif; color: #1d2733; }
   #map { position: fixed; inset: 0; }
-  .card { position: fixed; background: rgba(255,255,255,.92); backdrop-filter: blur(8px); border-radius: 14px; box-shadow: 0 4px 18px rgba(20,30,45,.14); }
+  .card { position: fixed; background: rgba(255,255,255,.96); border-radius: 14px; box-shadow: 0 4px 18px rgba(20,30,45,.14); }
   #title { top: 18px; left: 18px; padding: 14px 18px; }
   #title b { display: block; font-size: 17px; }
   #title span { display: block; font-size: 13px; color: #566372; margin-top: 4px; }
@@ -91,38 +91,62 @@ function inRing(p, r) {
   return c;
 }
 const guAt = p => { const i = INCHEON.rings.findIndex(r => inRing(p, r)); return i < 0 ? null : INCHEON.gu[i]; };
-const MASK = { type: "MultiPolygon", coordinates: INCHEON.rings.map(r => [r]) };
+// 글자 거르기(within)는 꼭짓점 수에 비례해 느려서 줄인 경계를 쓴다
+const MASK = { type: "MultiPolygon", coordinates: INCHEON.simple.map(r => [r]) };
 let x0 = 180, y0 = 90, x1 = -180, y1 = -90;
 for (const r of INCHEON.rings) for (const [x, y] of r) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
 const BOUNDS = [[x0, y0], [x1, y1]];
 
-// ───────── 구름 이미지: 픽셀마다 IDW → 색 → 흐리게 → 인천 내륙 모양으로 자르기 ─────────
-function cloudImage() {
-  const pad = 0.03, L0 = x0 - pad, L1 = x1 + pad, B0 = y0 - pad, B1 = y1 + pad;
-  const my = lat => Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360));   // 메르카토르 y
-  const iy = y => Math.atan(Math.sinh(y)) * 180 / Math.PI;
-  const W = 900, H = Math.round(W * (my(B1) - my(B0)) / ((L1 - L0) * Math.PI / 180));
-  const canvas = n => { const c = document.createElement("canvas"); c.width = W; c.height = H; return c; };
+// ───────── 이미지 레이어 공통: 경도·위도 범위를 메르카토르 픽셀로 ─────────
+const my = lat => Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360));   // 메르카토르 y
+const iy = y => Math.atan(Math.sinh(y)) * 180 / Math.PI;
+function frame(L0, L1, B0, B1, W) {
+  const H = Math.round(W * (my(B1) - my(B0)) / ((L1 - L0) * Math.PI / 180));
+  return {
+    W, H, coordinates: [[L0, B1], [L1, B1], [L1, B0], [L0, B0]],
+    canvas() { const c = document.createElement("canvas"); c.width = W; c.height = H; return c; },
+    lon: i => L0 + (i + .5) / W * (L1 - L0),
+    lat: j => iy(my(B1) - (j + .5) / H * (my(B1) - my(B0))),
+    px: ([lon, lat]) => [(lon - L0) / (L1 - L0) * W, (my(B1) - my(lat)) / (my(B1) - my(B0)) * H],
+  };
+}
+// 인천 내륙 모양. 구마다 따로 칠해서 합친다 (한 경로로 칠하면 방향에 따라 구멍이 날 수 있다)
+function inlandMask(f, blur) {
+  const c = f.canvas(), ctx = c.getContext("2d");
+  ctx.filter = `blur(${blur}px)`;
+  for (const r of INCHEON.rings) {
+    ctx.beginPath(); r.forEach((p, i) => ctx[i ? "lineTo" : "moveTo"](...f.px(p))); ctx.closePath(); ctx.fill();
+  }
+  return c;
+}
 
-  const raw = canvas(), img = raw.getContext("2d").createImageData(W, H);
-  for (let j = 0; j < H; j++) {
-    const lat = iy(my(B1) - (j + .5) / H * (my(B1) - my(B0)));
-    for (let i = 0; i < W; i++) {
-      const c = colorOf(idw([L0 + (i + .5) / W * (L1 - L0), lat])), k = (j * W + i) * 4;
+// ───────── 구름 이미지: 픽셀마다 IDW → 색 → 흐리게 → 인천 내륙 모양으로 자르기 ─────────
+// 어차피 흐리게 할 이미지라 작게(가로 300) 만든다. 지도가 늘려 그린다
+function cloudImage() {
+  const f = frame(x0 - 0.03, x1 + 0.03, y0 - 0.03, y1 + 0.03, 300);
+  const raw = f.canvas(), img = raw.getContext("2d").createImageData(f.W, f.H);
+  for (let j = 0; j < f.H; j++) {
+    const lat = f.lat(j);
+    for (let i = 0; i < f.W; i++) {
+      const c = colorOf(idw([f.lon(i), lat])), k = (j * f.W + i) * 4;
       img.data[k] = c[0]; img.data[k + 1] = c[1]; img.data[k + 2] = c[2]; img.data[k + 3] = 170;
     }
   }
   raw.getContext("2d").putImageData(img, 0, 0);
+  const out = f.canvas(), ctx = out.getContext("2d");
+  ctx.filter = "blur(7px)"; ctx.drawImage(raw, 0, 0);
+  ctx.filter = "none"; ctx.globalCompositeOperation = "destination-in"; ctx.drawImage(inlandMask(f, 5), 0, 0);
+  return { url: out.toDataURL(), coordinates: f.coordinates };
+}
 
-  const out = canvas(), ctx = out.getContext("2d");
-  ctx.filter = "blur(22px)"; ctx.drawImage(raw, 0, 0);
-  const mask = canvas(), mc = mask.getContext("2d");
-  const px = ([lon, lat]) => [(lon - L0) / (L1 - L0) * W, (my(B1) - my(lat)) / (my(B1) - my(B0)) * H];
-  mc.filter = "blur(14px)"; mc.beginPath();
-  for (const r of INCHEON.rings) { r.forEach((c, i) => mc[i ? "lineTo" : "moveTo"](...px(c))); mc.closePath(); }
-  mc.fill();
-  ctx.filter = "none"; ctx.globalCompositeOperation = "destination-in"; ctx.drawImage(mask, 0, 0);
-  return { url: out.toDataURL(), coordinates: [[L0, B1], [L1, B1], [L1, B0], [L0, B0]] };
+// ───────── 인천 밖 가림막: 넓게 칠하고 내륙 모양만 지운다 ─────────
+// 구멍 뚫린 도형(GeoJSON)으로 그리면 타일 경계에서 구멍이 메워져 내륙이 가려지는 일이 있어 이미지로 그린다
+function veilImage() {
+  const f = frame(x0 - 1, x1 + 1, y0 - 0.8, y1 + 0.8, 3000);   // 약 80m 한 칸
+  const out = f.canvas(), ctx = out.getContext("2d");
+  ctx.fillStyle = "rgba(242, 243, 245, 0.88)"; ctx.fillRect(0, 0, f.W, f.H);
+  ctx.globalCompositeOperation = "destination-out"; ctx.drawImage(inlandMask(f, 1), 0, 0);
+  return { url: out.toDataURL(), coordinates: f.coordinates };
 }
 
 // ───────── 화면 ─────────
@@ -144,7 +168,7 @@ const map = new maplibregl.Map({
   style: "https://tiles.openfreemap.org/styles/liberty",
   bounds: BOUNDS,
   maxBounds: [[x0 - 0.25, y0 - 0.15], [x1 + 0.25, y1 + 0.15]],
-  attributionControl: { compact: false, customAttribution: "추정: CCTV(인천교통정보센터) · 실측: 에어코리아" },
+  attributionControl: { compact: false, customAttribution: "추정: CCTV(인천교통정보센터) · 실측: 에어코리아 · 행정경계: 통계청 SGIS(vuski/admdongkor)" },
 });
 
 map.on("load", () => {
@@ -160,9 +184,8 @@ map.on("load", () => {
     l.type === "symbol" && all.slice(i).every(m => m.type === "symbol")).id;
 
   // 인천 밖 가림막 + 바깥 테두리
-  map.addSource("outside", { type: "geojson", data: { type: "Feature", geometry: {
-    type: "Polygon", coordinates: [[[123, 32], [133, 32], [133, 40], [123, 40], [123, 32]], ...INCHEON.rings] } } });
-  map.addLayer({ id: "outside", type: "fill", source: "outside", paint: { "fill-color": "#f2f3f5", "fill-opacity": 0.88 } }, labelsStart);
+  map.addSource("outside", { type: "image", ...veilImage() });
+  map.addLayer({ id: "outside", type: "raster", source: "outside", paint: { "raster-fade-duration": 0 } }, labelsStart);
   map.addSource("edge", { type: "geojson", data: { type: "Feature", geometry: { type: "MultiLineString", coordinates: INCHEON.edge } } });
   map.addLayer({ id: "edge", type: "line", source: "edge", paint: { "line-color": "#8b96a3", "line-width": 1.2, "line-opacity": 0.6 } }, labelsStart);
 
