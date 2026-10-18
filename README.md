@@ -51,6 +51,7 @@ C:\26_2_AICapstone\
 │  ├─ contact_sheet.py         수집 이미지를 한 장으로 붙여 보기
 │  ├─ make_prototype_data.py   조원에게 넘길 모델 출력 샘플 생성
 │  ├─ make_mockup_boundary.py  서비스 시안이 쓰는 인천 내륙 경계 생성 → Web\mockup\
+│  ├─ make_service_shared.py   조원에게 줄 공통 자료(격자·경계·스키마·API 응답 예시) → data\service_shared\
 │  ├─ fetch_songui.py          에어코리아 PM2.5 조회
 │  └─ analyze_songui.py        PM2.5 등급 분포 분석
 │
@@ -100,6 +101,7 @@ C:\26_2_AICapstone\
 │  ├─ contact_sheets\      이미지 확인용 모아보기
 │  ├─ model\               이미지 특징(features.csv)·베이스라인 사진별 예측(baseline_pred.csv)·CNN 결과(cnn\, 설계가 바뀌기 전 결과는 cnn_archive\)·384로 줄인 사진(cnn_cache\, 7GB)
 │  ├─ mockup\              시안 경계 원본(행정동 경계 2026-10-01판, 35MB)
+│  ├─ service_shared\      조원에게 줄 공통 자료 (새 저장소의 shared\로 옮김)
 │  ├─ screening\           화각 스크리닝 산출물
 │  └─ songui_pm25\         PM2.5 원본·정제·차트
 │
@@ -184,6 +186,14 @@ python Tools\contact_sheet.py --date 2026-09-28 --camera 113    그 카메라의
 
 ```
 python Tools\make_mockup_boundary.py
+```
+
+### `make_service_shared.py` — 조원에게 줄 공통 자료
+백엔드·프론트 조원이 같이 쓰는 파일을 `data\service_shared\`에 만듭니다. 1km 격자 388칸, 경계, 카메라·측정소, DB 스키마(`docs/서비스_구상.md`에서 추출),
+API 응답 예시(VM 추정값으로 계산), 시안 사본입니다. 격자·보간은 시안(`Web\mockup\index.html`)과 같은 식입니다.
+
+```
+python Tools\make_service_shared.py --estimates data\estimates\estimates_vm.csv     VM의 estimates.csv를 받아 둔 사본
 ```
 
 ### `fetch_songui.py` / `analyze_songui.py` — PM2.5 라벨 분석
