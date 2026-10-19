@@ -1,6 +1,7 @@
 # 추정기 — 수집기가 저장한 사진을 읽어 카메라별 PM2.5를 추정한다. 수집기와 따로 돈다(추정 쪽 오류가 수집을 멈추지 않게).
 #
-#   python Estimator/estimate.py            찍은 지 3분 넘은 사진 중 아직 안 한 것 처리 (systemd 타이머가 5분마다 부른다)
+#   python Estimator/estimate.py            찍은 지 3분 넘은 사진 중 아직 안 한 것 처리 (systemd 타이머가 1분마다 부른다)
+#                                           회차(:00/:20/:40) 5분 뒤부터 15분 뒤까지는 1분마다, 그 뒤 남은 사진은 5분마다(정각 기준) 처리한다
 #   python Estimator/estimate.py --latest   가장 최근 낮 회차를 다시 처리 (밤에 동작 확인용, 결과에 "테스트" 표시)
 #   python Estimator/estimate.py --check-preprocess   PC 전용. 학습 때 만든 사진 사본과 전처리가 같은지 비교
 #
@@ -13,8 +14,10 @@
 # 습도는 학습 때와 같은 관측소(stations.json)의 사진 찍은 '분'의 1분값. 시각이 맞지 않는 값으로 메우지 않는다(현황 §2).
 # 습도는 아래 거르기에 늘 쓰고, 모델 입력으로는 모델이 받을 때(.json의 weather)만 넣는다.
 # 학습에서 뺀 조건(비, 습도 95% 이상)은 추정하지 않고 사유를 남긴다. 밤은 수집기가 이미 건너뛴다
-# 비 판단은 60분 강수량 > 0만 쓴다. 학습 라벨은 강수 감지(RE)로 걸렀지만, RE는 당일 결측(-99.9)이고
-# 다음 날쯤 채워져 실시간에는 쓸 수 없다(10/18 확인). 학습 때 RE로 뺀 사진 229장 중 60분 강수량은 185장(81%)을 잡는다(현황 §7)
+# 비 판단: 60분 강수량 > 0 또는 레이더 강우강도 0.5 mm/h 이상이면 비. 학습 라벨은 강수 감지(RE)로 걸렀지만 RE는 당일 결측이라
+# 실시간에는 쓸 수 없다(10/18). 60분 강수량은 1~2분 뒤 올라와 늘 있고, 레이더는 4~5분(늦으면 10분 넘게) 뒤 올라오고 빈 응답이 잦다(10/19).
+# 그래서 레이더는 기다리지 않는다 — 처리할 때 와 있으면 보태고, 없으면 60분 강수량으로 판단한다.
+# 기다리는 건 60분 강수량이 결측이고 레이더도 없을 때뿐이다(회차 15분 뒤까지 1분마다). 그래도 없으면 일단 추정한다(10/18 결정)
 import argparse
 import csv
 import html
@@ -38,8 +41,12 @@ MODEL = "incheon_log_top60"                     # 인천 ver 최종 (⑤ 위쪽 
 ONNX_DIR = ROOT / "data/model/onnx"
 OUT = ROOT / "data/estimates"
 AWS_MIN = "https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min"
+RADAR = "https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-rdr_cmp_aws_pt_data"   # AWS지점별 레이더 합성, 5분 간격
 WAIT_MIN = 3          # 1분 습도는 1~2분 뒤에 올라온다(10/13 실측). 찍은 지 이만큼 지난 사진만 처리
 GIVE_UP_MIN = 60      # 이만큼 지나도 습도가 없으면 '습도 결측'으로 남기고 넘어간다
+START_MIN = 5         # 회차 이만큼 뒤부터 처리한다
+QUICK_MIN = 15        # 회차 이만큼 뒤까지는 1분마다 다시 본다. 레이더는 15분이면 99% 올라온다(10/19 실측)
+RADAR_MMH = 0.5       # 레이더 강우강도 이 이상이면 비. 10/18 비 온 날 대조에서 비 99%, 헛걸림 4.5%
 HUMIDITY_MAX = 95     # 학습에서 뺀 조건 (Model/baseline.py)
 TOP = 0.6             # ⑤ 위쪽 60%
 FIELDS = ["captured_at", "camera_id", "name", "image", "humidity", "rain", "pm25_est", "status", "mode", "estimated_at"]
@@ -103,6 +110,45 @@ class Humidity:
         return None if rows is None else rows.get(minute, (None, None))
 
 
+def frame_time(v):
+    """레이더 응답의 시각 칸(YYYYMMDDHHMI)이 32비트 정수로 넘쳐 온다 → 2^32를 더해 되돌린다(10/18 확인)"""
+    v = int(v)
+    while v < 200000000000:
+        v += 2 ** 32
+    return datetime.strptime(str(v), "%Y%m%d%H%M")
+
+
+class Radar:
+    """관측소별 레이더 강우강도(mm/h). 사진을 찍은 시각이 속한 5분 값을 쓴다.
+    빈 응답이 잦다(재시도 없이 65%, 10/19 실측). 한 번 실행에서는 두 번만 묻고 없으면 None — 추정기가 1분마다 다시 돌므로
+    여기서 오래 붙잡지 않는다(관측소 7곳에 긴 재시도를 걸면 한 번 실행이 몇 분씩 걸린다)"""
+
+    def __init__(self, key):
+        self.key, self.cache = key, {}
+
+    def get(self, stn, t):
+        frame = t.replace(minute=t.minute // 5 * 5, second=0)
+        k = (stn, frame)
+        if k not in self.cache:
+            self.cache[k] = None
+            when = frame.strftime("%Y%m%d%H%M")
+            for attempt in range(2):
+                try:
+                    r = requests.get(RADAR, params={"tm1": when, "tm2": when, "itv": "5", "qcd": "EXT", "cmp": "HSP",
+                                                    "stn": stn, "help": "0", "authKey": self.key}, timeout=5)
+                    for line in r.content.decode("euc-kr", "replace").splitlines():
+                        f = line.split(",")
+                        if f[0][:1].isdigit() and len(f) > 4 and frame_time(f[0]) == frame:
+                            v = float(f[4])
+                            self.cache[k] = None if v <= -900 else max(0.0, v)   # -250은 에코 없음(비 없음)
+                    if self.cache[k] is not None:
+                        break
+                except (requests.RequestException, ValueError):
+                    pass
+                time.sleep(2)
+        return self.cache[k]
+
+
 def read_log():
     with open(LOG, encoding="utf-8-sig", newline="") as f:
         return [r for r in csv.DictReader(f) if r["result"] == "success" and r["file_name"]]
@@ -151,11 +197,12 @@ def estimate(todo, mode, key):
     opts.intra_op_num_threads = 2
     sess = ort.InferenceSession(str(ONNX_DIR / f"{MODEL}.onnx"), opts, providers=["CPUExecutionProvider"])
     stations = json.loads(STATIONS.read_text(encoding="utf-8"))
-    hum = Humidity(key)
+    hum, radar = Humidity(key), Radar(key)
     now = datetime.now()
     out = []
     for r in todo:
         t = datetime.strptime(r["captured_at"], "%Y-%m-%d %H:%M:%S")
+        late = now - datetime.strptime(r["scheduled_at"], "%Y-%m-%d %H:%M:%S") > timedelta(minutes=QUICK_MIN)
         row = {"captured_at": r["captured_at"], "camera_id": r["cctv_id"], "name": r["name"], "image": r["file_name"],
                "humidity": "", "rain": "", "pm25_est": "", "mode": mode, "estimated_at": now.strftime("%Y-%m-%d %H:%M:%S")}
         stn = stations.get(r["cctv_id"])
@@ -165,10 +212,18 @@ def estimate(todo, mode, key):
                 continue                                   # 아직 안 올라왔거나 조회 실패 → 다음 번에 다시
             out.append({**row, "status": "습도 결측"})
             continue
-        row["humidity"], row["rain"] = v[0], "" if v[1] is None else f"60분 {v[1]}mm"
-        if v[1] is not None and v[1] > 0:                  # 60분 강수량이 결측이면 확인할 수 없어 일단 추정한다(10/18 결정)
-            out.append({**row, "status": "강수량 감지 — 추정 안 함"})
+        rn60 = v[1]
+        rd = None if rn60 is not None and rn60 > 0 else radar.get(stn, t)     # 강수량이 이미 비면 레이더는 안 묻는다
+        if rn60 is None and rd is None and mode == "live" and not late:
+            continue                                       # 비를 판단할 근거가 둘 다 없다 → 회차 15분 뒤까지 1분마다 다시
+        row["humidity"] = v[0]
+        row["rain"] = ("60분 결측" if rn60 is None else f"60분 {rn60}mm") +             ("" if rn60 is not None and rn60 > 0 else " · 레이더 결측" if rd is None else f" · 레이더 {rd}mm/h")
+        if rn60 is not None and rn60 > 0:
+            out.append({**row, "status": "비(60분 강수량) — 추정 안 함"})
             continue
+        if rd is not None and rd >= RADAR_MMH:
+            out.append({**row, "status": "비(레이더) — 추정 안 함"})
+            continue                                       # 둘 다 결측이면 확인할 수 없어 일단 추정한다(10/18 결정)
         if v[0] >= HUMIDITY_MAX:
             out.append({**row, "status": f"습도 {HUMIDITY_MAX}% 이상 — 추정 안 함"})
             continue
@@ -214,12 +269,21 @@ def main():
         last = max(r["scheduled_at"] for r in log)
         todo, mode = [r for r in log if r["scheduled_at"] == last], "test"
     else:
-        done, cut = read_done(), datetime.now() - timedelta(minutes=WAIT_MIN)
-        todo = [r for r in log if r["file_name"] not in done and datetime.strptime(r["captured_at"], "%Y-%m-%d %H:%M:%S") <= cut
-                and datetime.strptime(r["captured_at"], "%Y-%m-%d %H:%M:%S") >= datetime.now() - timedelta(hours=2)]
+        now = datetime.now()
+        done, cut = read_done(), now - timedelta(minutes=WAIT_MIN)
+
+        def due(r):
+            """회차 5~15분 뒤에는 매번(1분마다), 그 뒤 남은 사진(습도 결측 등)은 5분마다만"""
+            age = now - datetime.strptime(r["scheduled_at"], "%Y-%m-%d %H:%M:%S")
+            if age < timedelta(minutes=START_MIN):
+                return False
+            return age <= timedelta(minutes=QUICK_MIN) or now.minute % 5 == 0
+        todo = [r for r in log if r["file_name"] not in done and r["scheduled_at"]
+                and now - timedelta(hours=2) <= datetime.strptime(r["captured_at"], "%Y-%m-%d %H:%M:%S") <= cut and due(r)]
         mode = "live"
     if not todo:
-        print("처리할 사진 없음")
+        if mode == "test":                             # live는 1분마다 돌아 대부분 할 일이 없다. 로그를 채우지 않게 조용히 끝낸다
+            print("처리할 사진 없음")
         return
     t0 = time.time()
     rows = estimate(todo, mode, env_key())

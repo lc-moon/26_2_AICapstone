@@ -2,7 +2,9 @@
 # 추정기를 systemd에 등록한다. VM에서 한 번만 실행하면 된다. 수집기(cctv-collector)는 건드리지 않는다.
 #   bash deploy/install_estimator.sh
 #
-# pm-estimator.timer  5분마다 Estimator/estimate.py를 한 번 돌린다(돌 때만 메모리를 쓰고 끝나면 내려놓는다)
+# pm-estimator.timer  1분마다 Estimator/estimate.py를 한 번 돌린다(돌 때만 메모리를 쓰고 끝나면 내려놓는다).
+#                     할 일이 있는지는 스크립트가 정한다 — 회차 5~15분 뒤에는 매번, 그 밖에는 남은 사진만 5분마다
+# 타이머 간격을 바꾼 뒤에는 이 스크립트를 다시 실행하면 된다(덮어쓰고 다시 읽는다)
 # pm-web.service      data/estimates/index.html을 127.0.0.1:8080으로 보여 준다. 외부에 열지 않는다 — PC에서 SSH 터널로 본다
 # 먼저 필요한 것: $VENV에 onnxruntime, .env의 KMA_HUB_KEY, data/model/onnx/{모델}.onnx·.json (PC에서 scp)
 set -e
@@ -37,11 +39,11 @@ UNIT_EOF
 
 sudo tee /etc/systemd/system/pm-estimator.timer > /dev/null <<UNIT_EOF
 [Unit]
-Description=PM2.5 추정기 5분마다
+Description=PM2.5 추정기 1분마다
 
 [Timer]
-OnCalendar=*:0/5
-AccuracySec=30s
+OnCalendar=*:*:00
+AccuracySec=5s
 
 [Install]
 WantedBy=timers.target
@@ -65,6 +67,7 @@ UNIT_EOF
 
 sudo systemctl daemon-reload
 sudo systemctl enable --now pm-estimator.timer pm-web.service
+sudo systemctl restart pm-estimator.timer      # 이미 돌던 타이머가 바뀐 간격을 읽도록
 sleep 2
 systemctl --no-pager list-timers pm-estimator.timer | head -3
 systemctl --no-pager status pm-web | head -5
