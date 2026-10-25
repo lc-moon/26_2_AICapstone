@@ -9,6 +9,7 @@
 #       data/model/onnx/{모델}.onnx·.json (Estimator/export_onnx.py, scp로 옮김), .env의 KMA_HUB_KEY (AWS 매분자료)
 # 결과: data/estimates/estimates.csv  사진마다 한 줄 (추정값 또는 추정 안 한 사유)
 #       data/estimates/index.html     카메라별 최신 값 (web 서비스가 127.0.0.1:8080으로 보여 준다. SSH 터널로 본다)
+#       서비스 백엔드로 전송 (send.py, live만. .env에 주소·토큰이 있을 때. 실패해도 위 파일은 그대로)
 #
 # 학습과 같게 (Model/cnn.py _resized·batch): 글자 자리를 평균색으로 칠하고 → 위쪽 60% 자르고 → 384×384 INTER_AREA → RGB → 표준화.
 # 습도는 학습 때와 같은 관측소(stations.json)의 사진 찍은 '분'의 1분값. 시각이 맞지 않는 값으로 메우지 않는다(현황 §2).
@@ -38,6 +39,7 @@ MASKS = ROOT / "Model/text_mask"
 STATIONS = Path(__file__).with_name("stations.json")
 MODEL = "incheon_log_top60"                     # 인천 ver 최종 (⑤ 위쪽 60%, 기상 없음). 2026-10-15 인천+베이징 ver(mixed_top60_w-hum)에서 교체
                                                 # — 인천에서는 인천 ver가 같거나 낫고, 베이징 학습의 이점이 인천 고농도에서 확인되지 않음(현황 §7)
+                                                # 바꿀 때 send.py의 MODEL도 같이 (백엔드에 보내는 모델 이름)
 ONNX_DIR = ROOT / "data/model/onnx"
 OUT = ROOT / "data/estimates"
 AWS_MIN = "https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min"
@@ -256,6 +258,15 @@ def check_preprocess(n=40):
     print(f"사진 {len(rows)}장: 표준화 값 최대 차이 {worst:.6f} (0이면 학습 때와 똑같다)")
 
 
+def send_live():
+    """서비스 백엔드로 전송(send.py). 파일은 이미 저장했으므로 전송 쪽 문제는 로그만 남기고 넘어간다"""
+    try:
+        import send
+        send.send_pending()
+    except Exception as e:
+        print(f"{datetime.now():%H:%M} 전송 오류: {type(e).__name__}: {e}")
+
+
 def main():
     ap = argparse.ArgumentParser(description="수집된 사진 → PM2.5 추정")
     ap.add_argument("--latest", action="store_true", help="가장 최근 낮 회차를 다시 처리 (동작 확인용, '테스트' 표시)")
@@ -284,6 +295,8 @@ def main():
     if not todo:
         if mode == "test":                             # live는 1분마다 돌아 대부분 할 일이 없다. 로그를 채우지 않게 조용히 끝낸다
             print("처리할 사진 없음")
+        else:
+            send_live()                                # 할 일이 없어도 못 보낸 행은 다시 보낸다
         return
     t0 = time.time()
     rows = estimate(todo, mode, env_key())
@@ -292,6 +305,8 @@ def main():
     render(shown, mode)
     ok = sum(r["pm25_est"] != "" for r in rows)
     print(f"{datetime.now():%H:%M} {mode}: 사진 {len(todo)}장 중 {len(rows)}장 기록 (추정 {ok}), {time.time() - t0:.1f}초")
+    if mode == "live":
+        send_live()
 
 
 if __name__ == "__main__":
