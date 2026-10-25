@@ -78,6 +78,7 @@ C:\26_2_AICapstone\
 ├─ Estimator\           추정기 — VM에서 수집된 사진으로 PM2.5 추정 (수집기와 따로 돈다)
 │  ├─ export_onnx.py       PC에서 최종 모델을 ONNX로 바꾸고 PyTorch와 결과가 같은지 확인 → data\model\onnx\ (VM에는 scp)
 │  ├─ estimate.py          찍은 지 3분 넘은 사진 → 1분 습도·강수량·레이더로 거르기 → 추정 → data\estimates\ (1분마다, --latest: 최근 낮 회차로 확인)
+│  ├─ send.py              추정값 → 서비스 백엔드 POST /api/ingest/estimates (estimate.py가 끝에 부른다. .env에 주소·토큰이 없으면 건너뜀)
 │  └─ stations.json        카메라마다 습도를 받는 AWS 관측소 (학습 라벨과 같은 곳)
 │
 ├─ deploy\              서버 설치 스크립트
