@@ -190,7 +190,7 @@ python Tools\make_mockup_boundary.py
 ```
 
 ### `make_service_shared.py` — 조원에게 줄 공통 자료
-백엔드·프론트 조원이 같이 쓰는 파일을 `data\service_shared\`에 만듭니다. 1km 격자 388칸, 경계, 카메라·측정소, DB 스키마(`docs/서비스_구상.md`에서 추출),
+백엔드·프론트 조원이 같이 쓰는 파일을 `data\service_shared\`에 만듭니다. 1km 격자 456칸(경계와 겹치는 칸 전부), 경계(행정경계 + 빠진 매립지), 카메라·측정소, DB 스키마(`docs/서비스_구상.md`에서 추출),
 API 응답 예시(VM 추정값으로 계산), 시안 사본입니다. 격자·보간은 시안(`Web\mockup\index.html`)과 같은 식입니다.
 
 ```
