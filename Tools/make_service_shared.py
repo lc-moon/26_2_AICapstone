@@ -16,6 +16,8 @@ import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from shapely.geometry import Polygon, box
+
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "data/service_shared"
 KST = timezone(timedelta(hours=9))
@@ -74,8 +76,8 @@ A(백엔드)·B(프론트)가 같이 쓰는 파일입니다. 규칙과 할 일�
 | 파일 | 내용 |
 |---|---|
 | `schema.sql` | DB 테이블 (PostgreSQL) |
-| `boundary.geojson` | 인천 내륙 + 송도 경계(강화·옹진·영종 제외). `kind`가 `area`(범위), `outline`(바깥 테두리 선), `simple`(꼭짓점을 줄인 것, 지도 글자 거르기용) |
-| `grid_cells.geojson` | 1km 격자 388칸. `grid_id` 순서가 API `values` 배열의 순서 |
+| `boundary.geojson` | 인천 내륙 + 송도 경계(강화·옹진·영종 제외. 행정경계에 없는 매립지는 OSM으로 보탬). `kind`가 `area`(범위), `outline`(바깥 테두리 선), `simple`(꼭짓점을 줄인 것, 지도 글자 거르기용) |
+| `grid_cells.geojson` | 1km 격자 {n}칸 — 경계와 조금이라도 겹치는 칸 전부(칸 중심이 바다인 칸도 있음). `grid_id` 순서가 API `values` 배열의 순서 |
 | `cameras.json` | 카메라 20대. `grid_id`가 null인 103번(강화)은 화면 범위 밖이지만 보간 입력으로는 쓴다 |
 | `stations.json` | 인천과 인접 경기·서울의 도시대기 측정소. `use_for_compare`는 인천 내륙 안에 있는 곳 |
 | `mock/` | API 응답 예시 (아래) |
@@ -118,7 +120,7 @@ def main():
     rings, gus = inc["rings"], inc["gu"]
     boundary = {"type": "MultiPolygon", "coordinates": [[r] for r in rings]}
     dump(OUT / "boundary.geojson", {"type": "FeatureCollection", "features": [
-        {"type": "Feature", "properties": {"kind": "area", "note": "인천 내륙 + 송도 (행정경계 2026-10-01판, 통계청 SGIS). 범위 판정·가림막용"},
+        {"type": "Feature", "properties": {"kind": "area", "note": "인천 내륙 + 송도 (행정경계 2026-10-01판, 통계청 SGIS + 행정경계에 없는 매립지는 OSM). 범위 판정·가림막용"},
          "geometry": boundary},
         {"type": "Feature", "properties": {"kind": "outline", "note": "바깥 테두리 선만. 구 사이 경계는 뺐다"},
          "geometry": {"type": "MultiLineString", "coordinates": inc["edge"]}},
@@ -128,14 +130,18 @@ def main():
     xs = [x for r in rings for x, _ in r]
     ys = [y for r in rings for _, y in r]
     x0, y0, x1, y1 = min(xs), min(ys), max(xs), max(ys)
+    # 경계와 조금이라도 겹치는 칸은 모두 넣는다 (10/26). 칸 중심 기준이면 해안 땅의 약 11%가 어느 칸에도 안 들어
+    # 누를 수 있는 땅인데 값이 없었다. gu는 가장 많이 겹치는 구
+    polys = [Polygon(r).buffer(0) for r in rings]
     cells, row = [], 0
     lat = y0 + SY / 2
     while lat < y1:
         col, lon = 0, x0 + SX / 2
         while lon < x1:
-            gu = next((g for g, r in zip(gus, rings) if in_ring((lon, lat), r)), None)
-            if gu:
-                cells.append({"grid_id": len(cells), "row": row, "col": col, "gu": gu,
+            sq = box(lon - SX / 2, lat - SY / 2, lon + SX / 2, lat + SY / 2)
+            overlap = [(sq.intersection(p).area, g) for g, p in zip(gus, polys) if sq.intersects(p)]
+            if overlap and max(overlap)[0] > 0:
+                cells.append({"grid_id": len(cells), "row": row, "col": col, "gu": max(overlap)[1],
                               "center": [round(lon, 6), round(lat, 6)]})
             col += 1
             lon += SX
@@ -233,7 +239,7 @@ def main():
     sql = md.split("```sql\n", 1)[1].split("```", 1)[0]
     (OUT / "schema.sql").write_text("-- 인천 초미세먼지 지도 DB (PostgreSQL)\n" + sql + SEED, encoding="utf-8")
     shutil.copytree(ROOT / "Web/mockup", OUT / "mockup")
-    (OUT / "README.md").write_text(README, encoding="utf-8")
+    (OUT / "README.md").write_text(README.replace("{n}", str(len(cells))), encoding="utf-8")
 
     print(f"격자 {len(cells)}칸, 카메라 {len(cams)}대, 측정소 {len(stations)}곳, "
           f"10/16 회차 {len(day)}개 → {OUT.relative_to(ROOT)}")
