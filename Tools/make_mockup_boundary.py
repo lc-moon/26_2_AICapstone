@@ -19,7 +19,8 @@ import math
 from pathlib import Path
 
 import requests
-from shapely.geometry import Polygon, box, mapping, shape
+from shapely import concave_hull
+from shapely.geometry import MultiPoint, Polygon, box, mapping, shape
 from shapely.ops import unary_union
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -35,6 +36,7 @@ BBOX = (126.50, 37.30, 126.82, 37.66)   # OSM 바다를 받을 범위 (인천 �
 ZOOM = 13                               # 타일 한 칸 약 4km, 좌표 해상도 약 1m
 FREE_MIN = 1e-6      # 도². 약 0.01km²보다 작은 매립지 조각은 붙이지 않는다
 FREE_TOUCH = 0.003   # 도. 약 300m 안에서 내륙에 닿는 조각만 붙인다
+HULL_RATIO = 0.05    # 화면용 경계: 오목 껍질 비율. 작을수록 만을 덜 메운다 (0.02는 뾰족, 0.1부터 많이 메움. 10/26 비교)
 
 
 def parts(geom):
@@ -178,7 +180,8 @@ def main():
     region = box(*BBOX)
     adm = unary_union([g for f in json.loads(SRC.read_text(encoding="utf-8"))["features"]
                        for g in [shape(f["geometry"]).buffer(0)] if g.intersects(region)])
-    free = region.difference(load_ocean()).difference(adm)
+    ocean = load_ocean()
+    free = region.difference(ocean).difference(adm)
     inland_parts = list(kept)
     inland0 = unary_union(kept)
     added = [p for p in parts(free) if p.area > FREE_MIN and p.distance(inland0) < FREE_TOUCH]
@@ -190,8 +193,12 @@ def main():
 
     inland = unary_union(kept)
     simple = inland.simplify(SIMPLE_TOL)
+    # 화면용 경계: 부두 사이·만 입구를 직선으로 이어 바다 쪽만 메운다 (누를 수 있는 범위는 그대로). 다른 도시 땅은 덮지 않게 OSM 바다로 한정
+    hull = concave_hull(MultiPoint([c for p in parts(inland) for c in p.exterior.coords]), ratio=HULL_RATIO)
+    display = unary_union([inland, hull.difference(inland).intersection(ocean)])
     edge = [coords(r) for p in parts(inland) for r in [p.exterior, *p.interiors]]
-    data = {"gu": gus, "rings": rings, "simple": [coords(p.exterior) for p in parts(simple)], "edge": edge}
+    data = {"gu": gus, "rings": rings, "simple": [coords(p.exterior) for p in parts(simple)], "edge": edge,
+            "display": [coords(p.exterior) for p in parts(display) if p.geom_type == "Polygon" and p.area > FREE_MIN]}
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text("// Tools/make_mockup_boundary.py가 만든 파일. 행정경계: 통계청 SGIS (vuski/admdongkor 2026-10-01판), 인천 내륙만\n"

@@ -76,7 +76,7 @@ A(백엔드)·B(프론트)가 같이 쓰는 파일입니다. 규칙과 할 일�
 | 파일 | 내용 |
 |---|---|
 | `schema.sql` | DB 테이블 (PostgreSQL) |
-| `boundary.geojson` | 인천 내륙 + 송도 경계(강화·옹진·영종 제외. 행정경계에 없는 매립지는 OSM으로 보탬). `kind`가 `area`(범위), `outline`(바깥 테두리 선), `simple`(꼭짓점을 줄인 것, 지도 글자 거르기용) |
+| `boundary.geojson` | 인천 내륙 + 송도 경계(강화·옹진·영종 제외. 행정경계에 없는 매립지는 OSM으로 보탬). `kind`가 `area`(범위), `outline`(바깥 테두리 선), `simple`(꼭짓점을 줄인 것, 지도 글자 거르기용), `display`(화면용: 만 입구를 직선으로 메운 것. 가림막·구름에만) |
 | `grid_cells.geojson` | 1km 격자 {n}칸 — 경계와 조금이라도 겹치는 칸 전부(칸 중심이 바다인 칸도 있음). `grid_id` 순서가 API `values` 배열의 순서 |
 | `cameras.json` | 카메라 20대. `grid_id`가 null인 103번(강화)은 화면 범위 밖이지만 보간 입력으로는 쓴다 |
 | `stations.json` | 인천과 인접 경기·서울의 도시대기 측정소. `use_for_compare`는 인천 내륙 안에 있는 곳 |
@@ -125,7 +125,9 @@ def main():
         {"type": "Feature", "properties": {"kind": "outline", "note": "바깥 테두리 선만. 구 사이 경계는 뺐다"},
          "geometry": {"type": "MultiLineString", "coordinates": inc["edge"]}},
         {"type": "Feature", "properties": {"kind": "simple", "note": "꼭짓점을 줄인 경계(약 150m). 지도 글자 거르기(within)용 — 원본은 느리다"},
-         "geometry": {"type": "MultiPolygon", "coordinates": [[r] for r in inc["simple"]]}}]})
+         "geometry": {"type": "MultiPolygon", "coordinates": [[r] for r in inc["simple"]]}},
+        {"type": "Feature", "properties": {"kind": "display", "note": "화면용. area에 부두 사이·만 입구를 직선으로 이은 바다를 더한 것. 가림막·구름 경계에만 쓰고 클릭 판정은 area"},
+         "geometry": {"type": "MultiPolygon", "coordinates": [[r] for r in inc["display"]]}}]})
 
     xs = [x for r in rings for x, _ in r]
     ys = [y for r in rings for _, y in r]
