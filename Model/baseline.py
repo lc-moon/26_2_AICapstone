@@ -72,6 +72,7 @@ def load():
     n = len(d)
     steps = [("PM2.5 결측", d["pm25"].isna()),
              ("강수 감지", d["rain"] == 1),
+             ("60분 강수량", d["rn60"] > 0),     # 서비스 추정기와 같은 비 판단 (2026-11-03부터)
              (f"습도 {HUMIDITY_MAX}% 이상", d["humidity"] >= HUMIDITY_MAX),
              ("기상 결측", d[WEATHER].isna().any(axis=1)),
              ("화각 변경·깨짐", pd.Series(bad, index=d.index)),

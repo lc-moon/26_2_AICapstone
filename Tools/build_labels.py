@@ -10,6 +10,7 @@
 # 붙이는 규칙 (docs/현황.md §2·§6·§8)
 #   기상  — 사진을 실제로 찍은 '분'의 AWS 1분값. 파일명 시각(회차)이 아니라 로그의 captured_at을 쓴다
 #           관측소는 기온·습도·강수감지를 모두 갖춘 곳 중 최근접
+#           rain = 강수감지(RE, 0/1, 당일엔 비어 있음), rn60 = 60분 강수량(서비스 추정기의 비 판단과 같은 값)
 #   PM2.5 — 찍은 시각이 속한 1시간의 값. 에어코리아는 끝 시각으로 적으므로 11:21 사진은 dataTime 12:00
 #   값이 없으면 빈칸으로 둔다. 다른 시각·다른 관측소 값으로 메우지 않는다
 import argparse
@@ -41,7 +42,7 @@ NEED = ("TA", "HM", "RE")   # 습도·강수 필터에 필요해서, 셋 중 하
 NEED_RATIO = 0.9            # 하루 중 이 비율 이상 값이 있어야 '갖췄다'고 본다.
                             # 양도(500)는 기온·습도가 하루 179분만 나왔다 — 센서가 있어도 쓸 수 없다
 FIELDS = ["camera_id", "image", "captured_at", "sun_alt", "pm25", "pm10", "pm_station", "pm_time",
-          "temperature", "humidity", "wind_speed", "rain", "aws_station"]
+          "temperature", "humidity", "wind_speed", "rain", "rn60", "aws_station"]
 
 
 def km(lat1, lon1, lat2, lon2):
@@ -127,7 +128,7 @@ class Aws:
         return out
 
     def day(self, stn, day):
-        """관측소 하루치 1분값 {분: {TA, HM, RE, WS1}}. -50 이하는 결측이라 None으로 둔다."""
+        """관측소 하루치 1분값 {분: {TA, HM, RE, WS1, RN60}}. -50 이하는 결측이라 None으로 둔다."""
         if (stn, day) not in self.days:
             path = RAW / "aws" / f"{stn}_{day:%Y%m%d}.txt"
             if path.exists():
@@ -152,7 +153,7 @@ class Aws:
                     v = dict(zip(AWS_COLS, line.split()))
                     t = datetime.strptime(v["tm"], "%Y%m%d%H%M").replace(tzinfo=KST)
                     rows[t] = {k: (float(v[k]) if float(v[k]) > -50 else None)
-                               for k in ("TA", "HM", "RE", "WS1")}
+                               for k in ("TA", "HM", "RE", "WS1", "RN60")}
             self.days[(stn, day)] = rows
         return self.days[(stn, day)]
 
@@ -315,7 +316,7 @@ def main():
             "sun_alt": round(sun_altitude(c["lat"], c["lon"], t), 1),
             "pm25": pm25, "pm10": pm10, "pm_station": pm_pick[cid][0], "pm_time": f"{end:%Y-%m-%d %H:%M}",
             "temperature": w and w["TA"], "humidity": w and w["HM"],
-            "wind_speed": w and w["WS1"], "rain": w and w["RE"], "aws_station": stn,
+            "wind_speed": w and w["WS1"], "rain": w and w["RE"], "rn60": w and w["RN60"], "aws_station": stn,
         })
     with open(OUT / "labels.csv", "w", newline="", encoding="utf-8-sig") as f:
         w = csv.DictWriter(f, fieldnames=FIELDS)
