@@ -3,6 +3,7 @@
 #   python Model/cnn.py --test incheon_log_top60      먼저 시험 예측을 만든다 (data/model/cnn/pred_test.csv)
 #   python Model/calibrate.py incheon_log_top60       ⓐ 지금 서비스 모델
 #   python Model/calibrate.py incheon_log_top60_1019  ⓑ 10/19까지 다시 학습한 모델
+#   python Model/calibrate.py percam_hf               카메라별 모델(M3) — per_camera.py --test를 먼저
 #
 # 결과: data/model/cnn/{모델}/calib.csv  카메라별 ①의 a, ②의 a·b (보정값 = a + b × 예측, ①은 b = 1)
 #                             pred_unseen.csv  최종 모델이 배우지 않은 학습 기간 날의 예측 (있을 때만)
@@ -56,7 +57,8 @@ def fit_source(run, d):
     learned = set(pd.to_datetime(cv.captured_at).dt.date)
     dev = d[(d.city == "inc") & (d.part != "A")]
     unseen = dev[~dev.day.isin(learned)]
-    if unseen.empty:
+    # 카메라별 모델(M3)도 연습시험 예측으로 맞춘다. ②는 ⓐ가 외운 날이 pred_cv에 없지만, 그 날은 ⓐ 몸통이 이미 봐서 쓰지 않는다
+    if unseen.empty or run.startswith("percam_"):
         print(f"맞출 예측: 연습시험 예측 {cv.captured_at.str[:10].nunique()}일 {len(cv)}장 (pred_cv.csv)")
         return cv[["image", "camera_id", "captured_at", "pm_time", "pm25", "pred"]]
 
@@ -126,11 +128,20 @@ def main():
     ap.add_argument("run", help="data/model/cnn/ 아래 모델 폴더 이름 (예: incheon_log_top60)")
     args = ap.parse_args()
 
-    test_csv = cnn.OUT / "pred_test.csv"
-    test = pd.read_csv(test_csv, encoding="utf-8-sig", dtype={"camera_id": str}) if test_csv.exists() else pd.DataFrame(columns=["run"])
-    test = test[(test.run == args.run) & (test.sheet == "A")].reset_index(drop=True)
+    if args.run.startswith("percam_"):          # 카메라별 모델(M3)의 시험 예측은 per_camera.py --test가 따로 저장한다
+        test_csv, col = cnn.OUT / "pred_test_percam.csv", args.run.removeprefix("percam_")
+        test = pd.read_csv(test_csv, encoding="utf-8-sig", dtype={"camera_id": str}) if test_csv.exists() else pd.DataFrame()
+        test = test[["image", "camera_id", "captured_at", "pm_time", "pm25", col]].rename(columns={col: "pred"}) \
+            if col in test else pd.DataFrame()
+        hint = "python Model/per_camera.py --test"
+    else:
+        test_csv = cnn.OUT / "pred_test.csv"
+        test = pd.read_csv(test_csv, encoding="utf-8-sig", dtype={"camera_id": str}) if test_csv.exists() else pd.DataFrame(columns=["run"])
+        test = test[(test.run == args.run) & (test.sheet == "A")]
+        hint = f"python Model/cnn.py --test {args.run}"
+    test = test.reset_index(drop=True)
     if test.empty:
-        sys.exit(f"{test_csv}에 {args.run}의 시험 예측이 없습니다. python Model/cnn.py --test {args.run} 를 먼저 돌리세요")
+        sys.exit(f"{test_csv}에 {args.run}의 시험 예측이 없습니다. {hint} 를 먼저 돌리세요")
 
     d = cnn.load()
     src = fit_source(args.run, d).reset_index(drop=True)

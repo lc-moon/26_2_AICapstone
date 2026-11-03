@@ -66,6 +66,8 @@ C:\26_2_AICapstone\
 │  ├─ cnn.py               ConvNeXt V2-Tiny 미세조정 (인천 ver / 인천 log ver / 인천+베이징 ver) → data\model\cnn\
 │  ├─ run_queue.py         cnn.py 여러 개를 이어서 실행 (실패해도 다음 진행, 절전 방지, 기록 파일)
 │  ├─ calibrate.py         카메라별 보정(M2): 저장된 예측에 카메라마다 절편(또는 기울기+절편)을 얹어 시험 데이터로 채점
+│  ├─ per_camera.py        카메라별 모델(M3): Hugging Face 또는 ⓐ에서 출발해 카메라마다 학습, 통합 모델·보정과 나란히 채점
+│  ├─ gradcam_compare.py   같은 사진에서 모델마다 본 곳을 나란히 (M3 지름길 검사) → data\review\gradcam_compare.html
 │  ├─ text_mask.py         화면 위 글자(시각·지명) 자리 찾기 → text_mask\ (CNN 입력에서 평균색으로 가림)
 │  ├─ text_mask\           장면마다 글자 자리 (한 번 만들고 눈으로 확인한 것)
 │  ├─ roi.py               ROI 상자 그리기 페이지 생성·결과 반영, 후보 5개(하늘·먼 건물·둘 다·위 1/3·위 60%)의 상자
@@ -229,7 +231,12 @@ python Model\cnn.py --version mixed --input top60 --weather humidity --final-onl
 python Model\cnn.py --version incheon_log --input top60 --epochs 12 --tag 1019   같은 설정을 다른 기간으로 다시 학습 (폴더 incheon_log_top60_1019, 옛 폴더를 덮어쓰지 않음)
 python Model\cnn.py --test incheon_log_top60   저장된 CNN을 시험 데이터(인천 10/20~11/1)·시험지 B(베이징)로 채점. 이름을 안 주면 전부
 python Model\calibrate.py incheon_log_top60    카메라별 보정 — 시험 밖 날짜로 맞추고 시험 데이터로 채점 (--test를 먼저)
-python Model\run_queue.py "--version incheon_log" "--version mixed"   여러 개를 이어서 (기록: data\model\cnn\run_log.txt)
+python Model\per_camera.py hf from_a from_a_head   카메라별 모델 3후보 학습 (① Hugging Face 출발 / ②-전체 / ②-마지막 층, 합쳐 약 3시간)
+python Model\per_camera.py --test              카메라별 모델을 시험 데이터로 채점 (ⓐ·ⓑ·보정과 나란히, 회차 상관 포함)
+python Model\per_camera.py --lr-range          학습률 범위 시험 그래프 → data\review\lr_range.png (약 5분). --lr hf=3e-5 처럼 후보별 학습률을 바꿀 수 있다
+python Model\cnn.py --version incheon_log --input top60 --epochs 12 --tag c14 --days 2026-10-10 2026-10-11 ...   인천 학습 날짜를 골라서 (원인 가르기 실험 C)
+python Model\gradcam_compare.py                같은 사진에서 모델마다 본 곳을 나란히 → data\review\gradcam_compare.html
+python Model\run_queue.py "--version incheon_log" "--version mixed"   여러 개를 이어서 (기록: data\model\cnn\run_log.txt). "per_camera.py hf"처럼 첫 낱말이 .py면 그 스크립트를 돌린다
 python Model\text_mask.py               글자 자리 다시 찾기 (새 카메라·해상도가 생겼을 때) → data\review\text_mask_*.jpg로 확인
 python Model\roi.py                     ROI 상자 그리기 페이지 → data\review\roi.html (브라우저로 열어 그린 뒤 [저장])
 python Model\roi.py --apply 내려받기\roi.csv   그린 상자를 Model\roi.csv로 반영

@@ -2,7 +2,10 @@
 #
 #   python Model/run_queue.py "--version incheon_log" "--version mixed"
 #
-# 따옴표 하나가 cnn.py에 넘길 인자 한 묶음이다. 출력은 화면과 data/model/cnn/run_log.txt에 함께 남는다(이어 쓴다).
+#   python Model/run_queue.py "--version incheon_log" "per_camera.py hf" "calibrate.py percam_hf"
+#
+# 따옴표 하나가 cnn.py에 넘길 인자 한 묶음이다. 첫 낱말이 .py로 끝나면 Model/ 안의 그 스크립트를 돌린다.
+# 출력은 화면과 data/model/cnn/run_log.txt에 함께 남는다(이어 쓴다).
 # 도는 동안 Windows에 절전하지 말라고 요청한다(SetThreadExecutionState). 이 프로그램이 끝나면 저절로 풀리고
 # 전원 설정은 바꾸지 않는다. 노트북 덮개를 닫거나 직접 절전을 누르면 멈춘다.
 # 학습 중에는 게임처럼 GPU를 많이 쓰는 프로그램을 끈다 (README Model 절).
@@ -35,7 +38,9 @@ def main():
 
         for job in jobs:
             out(f"\n===== {job} 시작 {datetime.now():%m-%d %H:%M}\n")
-            p = subprocess.Popen([sys.executable, "-u", str(ROOT / "Model/cnn.py"), *shlex.split(job)], cwd=ROOT, env=env,
+            args = shlex.split(job)
+            script = args.pop(0) if args and args[0].endswith(".py") else "cnn.py"
+            p = subprocess.Popen([sys.executable, "-u", str(ROOT / "Model" / script), *args], cwd=ROOT, env=env,
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
             for line in p.stdout:
                 if "HF_TOKEN" not in line:          # 로그인 없이 가중치를 받는다는 안내. 매번 나와서 뺀다

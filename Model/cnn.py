@@ -316,11 +316,13 @@ def run_name(version, kind, weather, tag=""):
     return f"{version}_{kind}" + (f"_w-{'+'.join(SHORT[c] for c in weather)}" if weather else "") + (f"_{tag}" if tag else "")
 
 
-def run(d, arrs, version, kind, weather=(), tag=""):
+def run(d, arrs, version, kind, weather=(), tag="", days=()):
     use_bj, log = VERSIONS[version]
     out = OUT / run_name(version, kind, weather, tag)
     out.mkdir(parents=True, exist_ok=True)
     inc = d[(d.city == "inc") & (d.part != "A")]
+    if days:                          # 사진 사본(캐시)은 그대로 두고 학습에 쓰는 날만 고른다
+        inc = inc[inc.day.isin({date.fromisoformat(x) for x in days})]
     bj = d[(d.city == "bj") & (d.part != "B")]
     t_start = time.time()
 
@@ -354,7 +356,7 @@ def run(d, arrs, version, kind, weather=(), tag=""):
     model, _ = train(arrs["all"], d, learn.index.values, log, "최종", stop=best, weather=weather)
     torch.save(model.state_dict(), out / "model.pt")
     info = {"version": version, "input": kind, "weather": list(weather), "model": NAME, "beijing_train": use_bj, "log_target": log, "best_epoch": best,
-            "cv": table.loc[best].round(3).to_dict(), "train_photos": int(len(learn)),
+            "cv": table.loc[best].round(3).to_dict(), "train_photos": int(len(learn)), "train_days": list(days),
             "batch": BATCH, "lr": LR, "max_epochs": EPOCHS, "minutes": round((time.time() - t_start) / 60, 1),
             "finished": datetime.now().isoformat(timespec="seconds")}
     (out / "info.json").write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -415,6 +417,7 @@ def main():
     ap.add_argument("--final-only", action="store_true", help="연습시험은 그대로 두고 최종 모델만 다시 학습 (시험지 열기 전에만)")
     ap.add_argument("--seed", type=int, default=SEED, help=f"--final-only의 출발점 번호 (기본 {SEED})")
     ap.add_argument("--tag", default="", help="결과 폴더 이름 끝에 붙일 꼬리표. 같은 설정을 다른 기간으로 다시 학습할 때 옛 폴더를 덮어쓰지 않게 (예: --tag 1019)")
+    ap.add_argument("--days", nargs="*", default=[], help="인천 학습에 쓸 날만 (예: --days 2026-10-10 2026-10-11). 안 주면 학습 기간 전체")
     args = ap.parse_args()
     if args.test is None and not args.version:
         ap.error("--version 또는 --test 를 주세요")
@@ -430,7 +433,7 @@ def main():
         refinal(d, inputs(d, args.input), args.version, args.input, tuple(args.weather), args.seed, args.tag)
     else:
         print(f"입력: {args.input} — {INPUTS[args.input]}{', 기상: ' + ' '.join(args.weather) if args.weather else ''}, 최대 {EPOCHS}바퀴")
-        run(d, inputs(d, args.input), args.version, args.input, tuple(args.weather), args.tag)
+        run(d, inputs(d, args.input), args.version, args.input, tuple(args.weather), args.tag, args.days)
 
 
 if __name__ == "__main__":
