@@ -23,6 +23,7 @@ import argparse
 import csv
 import html
 import json
+import os
 import sys
 import time
 from datetime import datetime, timedelta
@@ -51,6 +52,7 @@ QUICK_MIN = 15        # 회차 이만큼 뒤까지는 1분마다 다시 본다. 
 RADAR_MMH = 0.5       # 레이더 강우강도 이 이상이면 비. 10/18 비 온 날 대조에서 비 99%, 헛걸림 4.5%
 HUMIDITY_MAX = 95     # 학습에서 뺀 조건 (Model/baseline.py)
 TOP = 0.6             # ⑤ 위쪽 60%
+DISPLAY_W, DISPLAY_H, MOSAIC = 640, 360, 24   # 서비스 화면용 사본: 위쪽 60%는 그대로, 아래 40%는 24px 굵은 모자이크(번호판)
 FIELDS = ["captured_at", "camera_id", "name", "image", "humidity", "rain", "pm25_est", "status", "mode", "estimated_at"]
 
 
@@ -59,6 +61,45 @@ def env_key():
         if line.startswith("KMA_HUB_KEY="):
             return line.split("=", 1)[1].strip().strip('"\'')
     sys.exit(".env에 KMA_HUB_KEY가 없습니다")
+
+
+def env_value(name):
+    for line in (ROOT / ".env").read_text(encoding="utf-8").splitlines():
+        if line.startswith(name + "="):
+            return line.split("=", 1)[1].strip().strip('"\'')
+    return None
+
+
+def display_copy(img):
+    """서비스 화면용 사본(BGR). 모델이 보는 위쪽 60%는 그대로 두고 아래 40%만 굵게 모자이크한다"""
+    img = cv2.resize(img, (DISPLAY_W, DISPLAY_H), interpolation=cv2.INTER_AREA)
+    cut = round(TOP * DISPLAY_H)
+    bot = img[cut:]
+    small = cv2.resize(bot, (DISPLAY_W // MOSAIC, -(-(DISPLAY_H - cut) // MOSAIC)), interpolation=cv2.INTER_AREA)
+    img[cut:] = cv2.resize(small, (DISPLAY_W, DISPLAY_H - cut), interpolation=cv2.INTER_NEAREST)
+    return img
+
+
+def save_displays(rows):
+    """처리한 사진마다 가린 사본을 CAM_DIR/{카메라}.jpg로 덮어쓴다(서비스 패널의 근거 사진, /cam/으로 내보냄).
+    원본은 밖으로 내보내지 않는다. 늦게 처리된 옛 회차가 새 사진을 덮지 않도록 파일 시각 = 촬영 시각으로 비교한다"""
+    out = Path(env_value("CAM_DIR") or ROOT / "data/cam")
+    out.mkdir(parents=True, exist_ok=True)
+    for r in rows:
+        dst = out / f"{r['camera_id']}.jpg"
+        shot = datetime.strptime(r["captured_at"], "%Y-%m-%d %H:%M:%S").timestamp()
+        if dst.exists() and dst.stat().st_mtime >= shot:
+            continue
+        img = cv2.imread(str(IMAGES / r["image"]))
+        if img is None:
+            continue
+        tmp = dst.with_suffix(".tmp")
+        ok, buf = cv2.imencode(".jpg", display_copy(img), [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if ok:
+            tmp.write_bytes(buf.tobytes())
+            os.chmod(tmp, 0o644)
+            os.utime(tmp, (shot, shot))
+            os.replace(tmp, dst)                       # 브라우저가 반쯤 쓴 파일을 받지 않게 한 번에 바꾼다
 
 
 def preprocess(path, meta):
@@ -301,6 +342,10 @@ def main():
     t0 = time.time()
     rows = estimate(todo, mode, env_key())
     append(rows)
+    try:
+        save_displays(rows)
+    except Exception as e:                             # 화면용 사본 문제로 추정·전송이 멈추면 안 된다
+        print(f"{datetime.now():%H:%M} 화면용 사진 저장 오류: {type(e).__name__}: {e}")
     shown = rows if mode == "test" else list(read_done().values())
     render(shown, mode)
     ok = sum(r["pm25_est"] != "" for r in rows)
