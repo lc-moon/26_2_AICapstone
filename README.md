@@ -65,6 +65,7 @@ C:\26_2_AICapstone\
 │  ├─ baseline.py          거르기·날짜 분할·회귀·평가 → data\model\baseline_pred.csv
 │  ├─ cnn.py               ConvNeXt V2-Tiny 미세조정 (인천 ver / 인천 log ver / 인천+베이징 ver) → data\model\cnn\
 │  ├─ run_queue.py         cnn.py 여러 개를 이어서 실행 (실패해도 다음 진행, 절전 방지, 기록 파일)
+│  ├─ calibrate.py         카메라별 보정(M2): 저장된 예측에 카메라마다 절편(또는 기울기+절편)을 얹어 시험 데이터로 채점
 │  ├─ text_mask.py         화면 위 글자(시각·지명) 자리 찾기 → text_mask\ (CNN 입력에서 평균색으로 가림)
 │  ├─ text_mask\           장면마다 글자 자리 (한 번 만들고 눈으로 확인한 것)
 │  ├─ roi.py               ROI 상자 그리기 페이지 생성·결과 반영, 후보 5개(하늘·먼 건물·둘 다·위 1/3·위 60%)의 상자
@@ -225,7 +226,9 @@ python Model\cnn.py --version incheon   CNN 인천 ver — 연습시험(3묶음�
 python Model\cnn.py --version incheon_log   CNN 인천 ver을 로그로 학습 (로그 효과 확인용)
 python Model\cnn.py --version mixed     CNN 인천+베이징 ver — 베이징 학습 날짜를 섞는다
 python Model\cnn.py --version mixed --input top60 --weather humidity --final-only --seed 1   연습시험은 두고 최종 모델만 다시 (시험지 열기 전에만)
+python Model\cnn.py --version incheon_log --input top60 --epochs 12 --tag 1019   같은 설정을 다른 기간으로 다시 학습 (폴더 incheon_log_top60_1019, 옛 폴더를 덮어쓰지 않음)
 python Model\cnn.py --test incheon_log_top60   저장된 CNN을 시험 데이터(인천 10/20~11/1)·시험지 B(베이징)로 채점. 이름을 안 주면 전부
+python Model\calibrate.py incheon_log_top60    카메라별 보정 — 시험 밖 날짜로 맞추고 시험 데이터로 채점 (--test를 먼저)
 python Model\run_queue.py "--version incheon_log" "--version mixed"   여러 개를 이어서 (기록: data\model\cnn\run_log.txt)
 python Model\text_mask.py               글자 자리 다시 찾기 (새 카메라·해상도가 생겼을 때) → data\review\text_mask_*.jpg로 확인
 python Model\roi.py                     ROI 상자 그리기 페이지 → data\review\roi.html (브라우저로 열어 그린 뒤 [저장])
