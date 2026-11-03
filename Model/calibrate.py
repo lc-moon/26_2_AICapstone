@@ -102,6 +102,25 @@ def bias_table(t, cols):
     return out
 
 
+def day_compare(t, cols, n_boot=5000):
+    """날짜별 MAE와, 시험 날짜를 무작위로 다시 뽑았을 때(부트스트랩) MAE 차이의 95% 범위.
+    보정에는 학습의 흔들림이 없어 0.1 규칙의 근거(다시 학습한 흔들림 0.03~0.04)가 맞지 않는다. 대신 "하필 이 13일"의 흔들림을 잰다"""
+    day = t.captured_at.str[5:10]
+    err = pd.DataFrame({k: (t[c] - t.pm25).abs() for k, c in cols.items()})
+    by_day = err.groupby(day)
+    print(by_day.mean().round(2).to_string())
+    sums, counts = by_day.sum().values, by_day.size().values
+    names = list(cols)
+    rng = np.random.default_rng(0)
+    pick = rng.integers(0, len(counts), (n_boot, len(counts)))
+    mae = sums[pick].sum(1) / counts[pick].sum(1)[:, None]          # 뽑을 때마다 사진 수만큼 가중한 MAE
+    daily = by_day.mean()
+    for i, j in [(1, 0), (2, 0), (2, 1)]:
+        lo, hi = np.percentile(mae[:, i] - mae[:, j], [2.5, 97.5])
+        wins = int((daily[names[i]] < daily[names[j]]).sum())
+        print(f"{names[i]} − {names[j]}: 이긴 날 {wins}/{len(daily)}, MAE 차이 95% 범위 {lo:+.2f} ~ {hi:+.2f}")
+
+
 def main():
     ap = argparse.ArgumentParser(description="카메라별 보정 (M2)")
     ap.add_argument("run", help="data/model/cnn/ 아래 모델 폴더 이름 (예: incheon_log_top60)")
@@ -137,6 +156,9 @@ def main():
     print(t.round(2).to_string())
     kind = "②" if t.MAE["②"] < t.MAE["①"] - TOLERANCE else "①"
     print(f"→ {kind} ({'기울기+절편' if kind == '②' else '절편만'}{'' if kind == '②' else ', ②가 0.1 넘게 좋지 않으면 더 단순한 ①'})")
+
+    print("\n날짜별 MAE")
+    day_compare(test, cols)
 
     print("\n습도별 치우침 (예측 − 정답 평균)")
     print(bias_table(test, cols).round(2).to_string())
