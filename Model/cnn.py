@@ -6,7 +6,7 @@
 #   python Model/cnn.py --version mixed --input sky    입력 종류 (기본 masked = 사진 전체 + 글자 가림). INPUTS 참고
 #   python Model/cnn.py --version mixed --input sky --weather humidity sun_alt --epochs 12   기상을 사진 특징 옆에 붙임
 #   python Model/cnn.py --version mixed --input top60 --weather humidity --final-only --seed 1   최종 모델만 다시 (시험지 열기 전에만)
-#   python Model/cnn.py --test                   저장된 최종 모델 전부를 시험지 A(인천)·B(베이징)로 채점. 모든 작업이 끝난 뒤 한 번만
+#   python Model/cnn.py --test [모델 ...]        저장된 최종 모델(안 주면 전부)을 시험 데이터(인천 10/20~11/1)·시험지 B(베이징)로 채점
 #   여러 개를 이어서 돌릴 때는 Model/run_queue.py
 #
 # 입력: data/labels/labels.csv·labels_beijing.csv, data/images/, 거르기는 베이스라인과 같다 (view_check.py·view_review.csv)
@@ -22,7 +22,7 @@
 #   - 카메라·도시 정보는 주지 않는다. "베이징이면 높게" 같은 지름길을 배우지 않게
 #   - 증강은 살짝 잘라내기·좌우 뒤집기만. 색·밝기는 정답 신호라 건드리지 않는다
 #   - 인천+베이징 ver은 log(1+PM2.5)를 배운다. 베이징 200대의 큰 오차가 학습을 장악하지 않게. 점수는 원래 농도로 낸다
-#   - 연습시험: 인천 개발 14일과 베이징 학습 206일을 각각 날짜 번호 % 4 (0·1·2)로 3묶음. 회차마다 같은 번호의
+#   - 연습시험: 인천 개발 날짜는 날짜 번호 % 3, 베이징 학습 206일은 % 4 (0·1·2)로 각각 3묶음 (인천은 2026-11-03부터 % 3). 회차마다 같은 번호의
 #     인천·베이징 묶음을 함께 빼고 채점한다. 베이징을 배우지 않는 버전도 베이징 묶음을 채점해 기록한다
 #   - 바퀴 수: 최대 15바퀴 동안 매 바퀴 연습시험. 인천 ver은 인천 오차가 가장 작은 바퀴.
 #     인천+베이징 ver은 인천 오차가 최고 바퀴와 0.1 이내인 바퀴들 중 베이징 오차가 가장 작은 바퀴 (인천은 지키고 베이징을 올린다)
@@ -47,7 +47,7 @@ import torch.nn.functional as F
 from timm.layers.grn import GlobalResponseNorm
 
 import text_mask
-from baseline import HUMIDITY_MAX, LABELS, WEATHER, fold_of, is_test_day, scores, view_info
+from baseline import HUMIDITY_MAX, LABELS, TEST_LAST, WEATHER, fold_of, is_test_day, scores, view_info
 from roi import FULL, box as roi_box, load_auto, load_roi
 from view_check import load_review
 
@@ -119,7 +119,8 @@ def load():
              ("강수 감지", d.rain == 1),
              (f"습도 {HUMIDITY_MAX}% 이상", d.humidity >= HUMIDITY_MAX),
              ("기상 결측", d[WEATHER].isna().any(axis=1)),
-             ("화각 변경·깨짐", d.bad_view)]
+             ("화각 변경·깨짐", d.bad_view),
+             ("시험 기간 뒤", (d.city == "inc") & (d.day > TEST_LAST))]
     keep = pd.Series(True, index=d.index)
     city = d.city == "inc"
     print(f"사진 인천 {int(city.sum())}장, 베이징 {int((~city).sum())}장")
@@ -129,11 +130,11 @@ def load():
     d = d[keep].reset_index(drop=True)
 
     inc = d.city == "inc"
-    # 인천 f0·f1·f2 / 시험지 A, 베이징 b0·b1·b2 / 시험지 B. 번호가 같은 묶음끼리 같은 회차에 빠진다
+    # 인천 f0·f1·f2 / A = 시험 데이터(10/20~11/1), 베이징 b0·b1·b2 / 시험지 B. 번호가 같은 묶음끼리 같은 회차에 빠진다
     bj_n = d.day.map(lambda x: (x - BJ_FIRST_DAY).days % 4)
     d["part"] = np.where(inc, d.day.map(lambda x: "A" if is_test_day(x) else f"f{fold_of(x)}"),
                          np.where(bj_n == 3, "B", "b" + bj_n.astype(str)))
-    for name, m in [("인천 개발", inc & (d.part != "A")), ("시험지 A", d.part == "A"),
+    for name, m in [("인천 개발", inc & (d.part != "A")), ("시험(인천)", d.part == "A"),
                     ("베이징 학습", ~inc & (d.part != "B")), ("시험지 B", d.part == "B")]:
         print(f"  = {name:8} {d[m].day.nunique():3}일 {int(m.sum()):5}장, PM2.5 평균 {d[m].pm25.mean():5.1f} 최대 {d[m].pm25.max():4.0f}")
     return d
@@ -376,8 +377,8 @@ def refinal(d, arrs, version, kind, weather, seed):
     print(f"저장: {out}")
 
 
-def test(d):
-    runs = sorted(p.parent for p in OUT.glob("*/model.pt"))
+def test(d, names):
+    runs = sorted(p.parent for p in OUT.glob("*/model.pt") if not names or p.parent.name in names)
     if not runs:
         sys.exit("저장된 최종 모델이 없습니다")
     rows, preds = {}, []
@@ -395,7 +396,7 @@ def test(d):
             preds.append(part[["image", "camera_id", "captured_at", "pm_time", "pm25"]].assign(run=r.name, sheet=sheet, pred=p.round(2)))
     t = pd.DataFrame(rows).T
     t.index.names = ["모델", "시험지"]
-    print("\n시험지 A = 인천 (본 성적), B = 베이징 고농도 (참고)")
+    print("\nA = 인천 시험 데이터 10/20~11/1 (본 성적), B = 베이징 고농도 (참고)")
     print(t.round(2).to_string())
     pd.concat(preds).to_csv(OUT / "pred_test.csv", index=False, encoding="utf-8-sig")
     print(f"사진별 예측: {OUT / 'pred_test.csv'}")
@@ -409,11 +410,11 @@ def main():
     ap.add_argument("--weather", nargs="*", choices=WEATHER, default=[],
                     help="사진 특징 옆에 붙일 기상 칸 (예: --weather humidity sun_alt). 안 주면 사진만")
     ap.add_argument("--epochs", type=int, default=EPOCHS, help=f"최대 바퀴 수 (기본 {EPOCHS}). 1단계 최고점이 10~13바퀴라 ROI 단계부터 12")
-    ap.add_argument("--test", action="store_true", help="저장된 최종 모델을 시험지 A·B로 채점 (모든 작업이 끝난 뒤 한 번만)")
+    ap.add_argument("--test", nargs="*", help="저장된 최종 모델을 시험 데이터·시험지 B로 채점. 모델 이름을 주면 그것만 (예: --test incheon_log_top60)")
     ap.add_argument("--final-only", action="store_true", help="연습시험은 그대로 두고 최종 모델만 다시 학습 (시험지 열기 전에만)")
     ap.add_argument("--seed", type=int, default=SEED, help=f"--final-only의 출발점 번호 (기본 {SEED})")
     args = ap.parse_args()
-    if not args.test and not args.version:
+    if args.test is None and not args.version:
         ap.error("--version 또는 --test 를 주세요")
     globals()["EPOCHS"] = args.epochs
 
@@ -421,8 +422,8 @@ def main():
     torch.cuda.set_per_process_memory_fraction(0.8)
     torch.backends.cudnn.benchmark = True
     d = load()
-    if args.test:
-        test(d)
+    if args.test is not None:
+        test(d, args.test)
     elif args.final_only:
         refinal(d, inputs(d, args.input), args.version, args.input, tuple(args.weather), args.seed)
     else:

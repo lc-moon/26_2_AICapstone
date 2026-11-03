@@ -1,8 +1,8 @@
 # 베이스라인 — 이미지 통계와 기상으로 PM2.5를 회귀해, "이미지에 PM2.5 신호가 있는가"를 확인한다.
 #
-#   python Model/baseline.py           개발 점수 (시험지 A를 뺀 날짜로 날짜 단위 교차검증)
+#   python Model/baseline.py           개발 점수 (학습 기간 날짜로 날짜 단위 교차검증)
 #   python Model/baseline.py --cv3     개발 점수를 CNN과 같은 날짜 3묶음으로 (CNN과 나란히 비교할 때)
-#   python Model/baseline.py --test    시험지 A 점수. 모델을 다 고른 뒤에만 볼 것
+#   python Model/baseline.py --test    시험 데이터 점수
 #
 # 입력: data/labels/labels.csv (build_labels.py), data/model/features.csv (features.py),
 #       data/model/view_check.csv·Model/view_review.csv (view_check.py — 화각 변경·깨진 화면 거르기)
@@ -10,7 +10,8 @@
 #
 # 평가 규칙 (docs/현황.md §7)
 #   - 날짜 단위로 나눈다. 같은 날 사진이 학습과 시험에 걸치면 점수가 부풀려진다
-#   - 시험지 A = 9/22부터 센 날짜 번호를 4로 나눈 나머지가 3인 날. 데이터가 늘어도 규칙이 같아 흔들리지 않는다
+#   - 학습 9/22~10/19, 시험 10/20~11/1 (2026-11-03 결정). 시험은 이 기간 하나로 모든 후보를 채점한다.
+#     옛 시험지 A(날짜 번호 % 4 == 3)는 학습에 합쳤다. 11/2 이후 사진은 어디에도 쓰지 않는다
 #   - 평균만 찍는 모델 대비 개선폭을 같이 낸다
 #   - 사진 1장 단위와, 같은 카메라·같은 1시간 사진들의 예측 평균을 1시간 정답과 비교하는 단위를 둘 다 낸다
 import argparse
@@ -30,6 +31,7 @@ FEATURES = ROOT / "data/model/features.csv"
 PRED = ROOT / "data/model/baseline_pred.csv"
 
 FIRST_DAY = date(2026, 9, 22)
+TEST_FIRST, TEST_LAST = date(2026, 10, 20), date(2026, 11, 1)
 HUMIDITY_MAX = 95        # 이 습도 이상은 안개·박무로 흐려져 먼지 신호와 구분할 수 없다고 보고 뺀다
 WEATHER = ["humidity", "sun_alt", "temperature", "wind_speed"]
 IMAGE = ["all_bright", "all_contrast", "all_sat", "all_dark", "all_sharp", "all_blue_red",
@@ -37,12 +39,12 @@ IMAGE = ["all_bright", "all_contrast", "all_sat", "all_dark", "all_sharp", "all_
 
 
 def is_test_day(d):
-    return (d - FIRST_DAY).days % 4 == 3
+    return TEST_FIRST <= d <= TEST_LAST
 
 
 def fold_of(d):
-    """연습시험 3묶음 번호 (CNN과 같은 묶음). 시험지 A가 나머지 3이라 개발 날짜는 0·1·2로 나뉜다"""
-    return (d - FIRST_DAY).days % 4
+    """연습시험 3묶음 번호 (CNN과 같은 묶음). 학습 기간 날짜를 날짜 번호 % 3으로 0·1·2로 나눈다"""
+    return (d - FIRST_DAY).days % 3
 
 
 def view_info(d):
@@ -72,7 +74,8 @@ def load():
              ("강수 감지", d["rain"] == 1),
              (f"습도 {HUMIDITY_MAX}% 이상", d["humidity"] >= HUMIDITY_MAX),
              ("기상 결측", d[WEATHER].isna().any(axis=1)),
-             ("화각 변경·깨짐", pd.Series(bad, index=d.index))]
+             ("화각 변경·깨짐", pd.Series(bad, index=d.index)),
+             ("시험 기간 뒤", d["day"] > TEST_LAST)]
     keep = pd.Series(True, index=d.index)
     print(f"사진 {n}장")
     for name, bad in steps:
@@ -147,19 +150,19 @@ def report(results):
 
 def main():
     ap = argparse.ArgumentParser(description="이미지 통계·기상 → PM2.5 베이스라인")
-    ap.add_argument("--test", action="store_true", help="시험지 A로 평가 (모델을 다 고른 뒤에만)")
+    ap.add_argument("--test", action="store_true", help="시험 데이터로 평가")
     ap.add_argument("--cv3", action="store_true", help="하루씩 빼기 대신 CNN과 같은 날짜 3묶음으로 교차검증")
     args = ap.parse_args()
 
     d = load()
     test = d["day"].map(is_test_day)
     dev, held = d[~test].reset_index(drop=True), d[test].reset_index(drop=True)
-    print(f"개발 {dev['day'].nunique()}일 {len(dev)}장 / 시험지 A {held['day'].nunique()}일 {len(held)}장 "
-          f"({', '.join(f'{x:%m/%d}' for x in sorted(held['day'].unique()))})")
+    print(f"개발 {dev['day'].nunique()}일 {len(dev)}장 / 시험 {held['day'].nunique()}일 {len(held)}장 "
+          f"({held['day'].min():%m/%d}~{held['day'].max():%m/%d})")
     print(f"PM2.5 개발 구간 평균 {dev['pm25'].mean():.1f}, 표준편차 {dev['pm25'].std():.1f}, 최대 {dev['pm25'].max():.0f}")
 
     if args.test:
-        print("\n[시험지 A] 개발 날짜 전체로 학습")
+        print("\n[시험] 개발 날짜 전체로 학습")
         report({name: scores(held, predict(dev, held, spec)) for name, spec in MODELS.items()})
         return
 
