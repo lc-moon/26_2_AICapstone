@@ -7,6 +7,7 @@
 #   python Model/per_camera.py hf from_a from_a_head   이어서
 #   python Model/per_camera.py --lr-range from_b from_b_head   학습률 범위 시험 (후보를 안 주면 전부)
 #   python Model/per_camera.py --test             저장된 후보를 시험 데이터로 채점 (ⓐ·ⓑ·보정과 나란히)
+#   python Model/per_camera.py from_a_head_hphys from_a_head_hraw from_a_1e5_hphys from_a_1e5_hraw   M4: 마지막 층에 습도 한 칸 (HUM)
 #
 # 결과: data/model/cnn/percam_{후보}/  epochs.csv  바퀴별 연습시험 점수 (20대 예측을 합쳐서)
 #                                     pred_cv.csv 연습시험 사진별 예측   info.json 설정과 고른 바퀴
@@ -53,7 +54,17 @@ CANDIDATES = {                 # 이름: (출발점, 학습 기간, 마지막 �
     #   ⓑ가 이미 본 사진이라 손실이 내려가는 구간 없이 처음부터 낮고 평평하다가 오른다
     "from_b": ("b", "all", False, 2e-5, 10, "③-전체 ⓑ에서 출발, 9/22~10/19, 몸통까지"),
     "from_b_head": ("b", "all", True, 1e-4, 10, "③-마지막 층 ⓑ에서 출발, 9/22~10/19, 마지막 층만"),
+    # M4 습도 (2026-11-05): 습도 없는 짝과 출발점·기간·학습률이 같고 마지막 층에 습도 한 칸(cnn.HumNet)만 더한다
+    "from_a_head_hphys": ("a", "unseen", True, 3e-4, 10, "②-마지막 층 + 습도 한 칸(물리식)"),
+    "from_a_head_hraw": ("a", "unseen", True, 3e-4, 10, "②-마지막 층 + 습도 한 칸(그대로)"),
+    "from_a_1e5_hphys": ("a", "unseen", False, 1e-5, 10, "②-전체(1e-5) + 습도 한 칸(물리식)"),
+    "from_a_1e5_hraw": ("a", "unseen", False, 1e-5, 10, "②-전체(1e-5) + 습도 한 칸(그대로)"),
 }
+# 습도 후보: 이름 → (모양, 습도 가중치 학습률, 습도 없는 짝).
+# 학습률 3e-3은 11/5 계산: 연습시험 예측의 log 잔차를 표준화한 습도 칸으로 회귀하면 카메라 90%가 |가중치| 0.085 이내.
+# 카메라당 약 23걸음 × 바퀴라 3~10바퀴 어디서 멈춰도 그 거리의 2~4배를 갈 수 있는 값. 후보의 학습률(3e-4·1e-5)로는 0.03·0.001밖에 못 간다
+HUM = {"from_a_head_hphys": ("phys", 3e-3, "from_a_head"), "from_a_head_hraw": ("raw", 3e-3, "from_a_head"),
+       "from_a_1e5_hphys": ("phys", 3e-3, "from_a_1e5"), "from_a_1e5_hraw": ("raw", 3e-3, "from_a_1e5")}
 
 
 def unseen_days(d):
@@ -64,8 +75,14 @@ def unseen_days(d):
     return sorted(set(dev.day) - learned)
 
 
-def new_model(start, head_only, y_mean, fold=None):
-    """fold: 연습시험 묶음 번호. ③은 그 묶음을 안 본 몸통에서 출발한다 (최종 모델은 None → ⓑ)"""
+def new_model(start, head_only, y_mean, fold=None, hum=None):
+    """fold: 연습시험 묶음 번호. ③은 그 묶음을 안 본 몸통에서 출발한다 (최종 모델은 None → ⓑ).
+    hum: 습도 한 칸 모양. 감싼 모델의 습도 가중치는 0에서 출발하고 늘 학습한다"""
+    m = _base_model(start, head_only, y_mean, fold)
+    return cnn.HumNet(m, hum).to(cnn.DEV) if hum else m
+
+
+def _base_model(start, head_only, y_mean, fold):
     if start == "hf":
         return cnn.make_model(y_mean)
     if start == "a":
@@ -82,15 +99,17 @@ def new_model(start, head_only, y_mean, fold=None):
     return m
 
 
-def train(arr, d, rows, start, head_only, lr, epochs, eval_rows=None, stop=None, seed=cnn.SEED, fold=None):
+def train(arr, d, rows, start, head_only, lr, epochs, eval_rows=None, stop=None, seed=cnn.SEED, fold=None, hum=None, hum_lr=None):
     """cnn.train과 같은 일정(1바퀴 준비 + 코사인 감소)·증강·절대오차. 출발점과 학습할 부분만 다르다.
-    마지막 층만 학습할 때는 몸통을 평가 모드로 두어 특징이 흔들리지 않게 한다"""
+    마지막 층만 학습할 때는 몸통을 평가 모드로 두어 특징이 흔들리지 않게 한다. hum이면 습도 한 칸을 붙인다(표준화는 그 카메라의 공부 사진으로)"""
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
     target = np.log1p(d.pm25.values.astype(np.float32))
-    model = new_model(start, head_only, float(target[rows].mean()), fold)
-    params = [p for p in model.parameters() if p.requires_grad]
-    opt = torch.optim.AdamW(params, lr=lr, weight_decay=cnn.WEIGHT_DECAY)
+    W = cnn.hum_input(d, hum)
+    model = new_model(start, head_only, float(target[rows].mean()), fold, hum)
+    if hum:
+        model.fit_scale(W[rows])
+    opt = torch.optim.AdamW(cnn.opt_groups(model, lr, hum_lr), lr=lr, weight_decay=cnn.WEIGHT_DECAY)
     steps = max(1, len(rows) // cnn.BATCH)
     total = epochs * steps
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda i: min(1.0, (i + 1) / steps) * 0.5 * (1 + math.cos(math.pi * i / total)))
@@ -102,14 +121,14 @@ def train(arr, d, rows, start, head_only, lr, epochs, eval_rows=None, stop=None,
             r = order[i * cnn.BATCH:(i + 1) * cnn.BATCH]
             x = cnn.augment(cnn.batch(arr, r))
             with torch.autocast("cuda", dtype=torch.bfloat16):
-                out = model(x).squeeze(1).float()
+                out = cnn.forward(model, x, W, r).squeeze(1).float()
             loss = F.l1_loss(out, torch.from_numpy(target[r]).to(cnn.DEV))
             opt.zero_grad(set_to_none=True)
             loss.backward()
             opt.step()
             sched.step()
         if eval_rows is not None:
-            preds.append(cnn.predict(model, arr, eval_rows, True))
+            preds.append(cnn.predict(model, arr, eval_rows, True, W))
     return model, preds
 
 
@@ -169,13 +188,15 @@ def lr_range(d, arr, names, cams=("128", "143", "62"), steps=150):
 
 def run(d, arr, name):
     start, period, head_only, lr, epochs, desc = CANDIDATES[name]
+    hum, hum_lr, _ = HUM.get(name, (None, None, None))
     out = cnn.OUT / f"percam_{name}"
     out.mkdir(parents=True, exist_ok=True)
     dev = candidate_rows(d, name)
     fold = dev.day.map(fold_of)
     cams = sorted(dev.camera_id.unique())
     t0 = time.time()
-    print(f"\n[{desc}] {dev.day.nunique()}일 {len(dev)}장, 카메라 {len(cams)}대, 학습률 {lr}, 최대 {epochs}바퀴")
+    print(f"\n[{desc}] {dev.day.nunique()}일 {len(dev)}장, 카메라 {len(cams)}대, 학습률 {lr}, 최대 {epochs}바퀴"
+          + (f", 습도 가중치 학습률 {hum_lr}" if hum else ""))
 
     print("[연습시험] 카메라마다 날짜 3묶음 (날짜 번호 % 3)")
     P = np.full((epochs, len(dev)), np.nan)
@@ -186,7 +207,7 @@ def run(d, arr, name):
             learn, val = dev[m & (fold != f)].index.values, dev[m & (fold == f)].index.values
             if len(val) == 0 or len(learn) == 0:
                 continue
-            _, preds = train(arr, d, learn, start, head_only, lr, epochs, eval_rows=val, fold=f)
+            _, preds = train(arr, d, learn, start, head_only, lr, epochs, eval_rows=val, fold=f, hum=hum, hum_lr=hum_lr)
             P[:, pos[val].values] = np.array(preds)
         done = ~np.isnan(P[0])
         print(f"  {c:>6} 끝 ({time.time() - t0:.0f}초, 지금까지 마지막 바퀴 MAE {np.abs(P[-1, done] - dev.pm25.values[done]).mean():.2f})", flush=True)
@@ -200,18 +221,28 @@ def run(d, arr, name):
     pred.to_csv(out / "pred_cv.csv", index=False, encoding="utf-8-sig")
 
     print(f"[최종 모델] 카메라마다 학습 기간 전체로 {best}바퀴")
-    heads = {}
+    heads, hum_w = {}, {}
     for c in cams:
-        model, _ = train(arr, d, dev[dev.camera_id == c].index.values, start, head_only, lr, epochs, stop=best)
+        model, _ = train(arr, d, dev[dev.camera_id == c].index.values, start, head_only, lr, epochs, stop=best, hum=hum, hum_lr=hum_lr)
         if head_only:
-            heads[c] = {k: v.cpu() for k, v in model.head.fc.state_dict().items()}
+            sd = model.state_dict()
+            heads[c] = {k: v.cpu() for k, v in sd.items() if k.startswith("net.head.fc.") or k in ("w", "mu", "sd")} if hum \
+                else {k: v.cpu() for k, v in model.head.fc.state_dict().items()}
         else:
             torch.save(model.state_dict(), out / f"cam_{c}.pt")
+        if hum:
+            hum_w[c] = {"w": round(model.w.item(), 4), "effect_50_90": round(model.effect(), 4)}
     if head_only:
         torch.save(heads, out / "heads.pt")
+    if hum:
+        w = pd.Series({c: v["w"] for c, v in hum_w.items()})
+        e = pd.Series({c: v["effect_50_90"] for c, v in hum_w.items()})
+        print(f"습도 가중치: 중앙값 {w.median():+.3f}, 범위 {w.min():+.3f}~{w.max():+.3f}, 음수 {int((w < 0).sum())}/{len(w)}대")
+        print(f"습도 고정 시험 (같은 사진, 습도만 50 → 90%): 예측 × 중앙값 {e.median():.3f}, 범위 {e.min():.3f}~{e.max():.3f}")
     info = {"candidate": name, "description": desc, "start": start, "period": period, "head_only": head_only,
             "days": sorted(str(x) for x in dev.day.unique()), "photos": int(len(dev)), "cameras": cams,
             "lr": lr, "max_epochs": epochs, "best_epoch": best, "cv": table.loc[best].round(3).to_dict(),
+            "hum": hum, "hum_lr": hum_lr, "hum_w": hum_w or None,
             "input": INPUT, "minutes": round((time.time() - t0) / 60, 1), "finished": datetime.now().isoformat(timespec="seconds")}
     (out / "info.json").write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"저장: {out} ({info['minutes']}분)")
@@ -219,11 +250,19 @@ def run(d, arr, name):
 
 def load_cam_model(name, c):
     out = cnn.OUT / f"percam_{name}"
+    hum = HUM.get(name, (None,))[0]
     if CANDIDATES[name][2]:
-        m = new_model(CANDIDATES[name][0], True, 0.0)
-        m.head.fc.load_state_dict(torch.load(out / "heads.pt")[c])
+        m = new_model(CANDIDATES[name][0], True, 0.0, hum=hum)
+        h = torch.load(out / "heads.pt")[c]
+        if hum:
+            missing, unexpected = m.load_state_dict(h, strict=False)
+            assert not unexpected and not any(k.startswith("net.head.fc.") or k in ("w", "mu", "sd") for k in missing), (missing, unexpected)
+        else:
+            m.head.fc.load_state_dict(h)
         return m
     m = cnn.make_model(pretrained=False)
+    if hum:
+        m = cnn.HumNet(m, hum).to(cnn.DEV)
     m.load_state_dict(torch.load(out / f"cam_{c}.pt", map_location=cnn.DEV))
     return m
 
@@ -243,16 +282,19 @@ def test(d, arr):
     t = part[["image", "camera_id", "captured_at", "pm_time", "pm25", "humidity"]].copy()
     for n in names:
         trained = json.loads((cnn.OUT / f"percam_{n}" / "info.json").read_text(encoding="utf-8"))["cameras"]
+        W = cnn.hum_input(d, HUM.get(n, (None,))[0])
         p = pd.Series(np.nan, index=part.index)
         for c, g in part.groupby("camera_id"):
             if c in trained:
-                p[g.index] = cnn.predict(load_cam_model(n, c), arr, g.index.values, True)
+                p[g.index] = cnn.predict(load_cam_model(n, c), arr, g.index.values, True, W)
         t[n] = p.round(2).values
     t = t.reset_index(drop=True)
 
     # 비교 상대: ⓐ·ⓑ (pred_test.csv), 보정 ② (pred_test_calib.csv)
     ref = pd.read_csv(cnn.OUT / "pred_test.csv", encoding="utf-8-sig")
-    for run, col in [(BASE, "ⓐ"), (RETRAIN, "ⓑ")]:
+    ref_runs = [(BASE, "ⓐ"), (RETRAIN, "ⓑ")] + [(r, run_label(r)) for r in sorted(ref.run.unique())
+                                                 if r.startswith(BASE + "_") and r != RETRAIN and ("_h-" in r or "_lr" in r)]
+    for run, col in ref_runs:
         r = ref[(ref.run == run) & (ref.sheet == "A")].set_index("image").pred
         if len(r):
             t[col] = t.image.map(r)
@@ -260,7 +302,8 @@ def test(d, arr):
         f = cnn.OUT / run / "pred_test_calib.csv"
         if f.exists():
             t[col] = t.image.map(pd.read_csv(f, encoding="utf-8-sig").set_index("image").calib2)
-    cols = {c: c for c in ["ⓐ", "ⓐ+②보정", "ⓑ", "ⓑ+②보정", *names] if c in t and t[c].notna().all()}
+    extra = [col for r, col in ref_runs[2:]]
+    cols = {c: c for c in ["ⓐ", "ⓐ+②보정", "ⓑ", "ⓑ+②보정", *extra, *names] if c in t and t[c].notna().all()}
     t.to_csv(cnn.OUT / "pred_test_percam.csv", index=False, encoding="utf-8-sig")
 
     print(f"\n[시험 데이터] 10/20~11/1 {t.captured_at.str[:10].nunique()}일 {len(t)}장")
@@ -273,11 +316,37 @@ def test(d, arr):
     print("\n습도별 치우침 (예측 − 정답 평균)")
     print(bias_table(t, cols).round(2).to_string())
     for n in names:
+        if n in HUM:                  # 습도 후보는 습도 없는 짝과 비교한다 (M4 판정)
+            continue
         ref_col = "ⓐ+②보정" if CANDIDATES[n][0] == "a" else "ⓑ+②보정"
         if ref_col in cols:
             print(f"\n날짜별: {n} vs {ref_col}")
             day_compare(t, {ref_col: ref_col, "ⓐ": "ⓐ", n: n})
+    # M4: 습도 후보 vs 습도 없는 짝 (카메라별은 HUM의 짝, 통합은 이름에서 "_h-…"를 뺀 모델)
+    pairs = [(n, HUM[n][2]) for n in names if n in HUM and HUM[n][2] in cols]
+    pairs += [(col, run_label(r.replace(f"_h-{r.split('_h-')[1].split('_')[0]}", ""))) for r, col in ref_runs[2:] if "_h-" in r]
+    for n, base in pairs:
+        if n in cols and base in cols:
+            print(f"\n[M4] 날짜별: {n} vs 습도 없는 짝 {base}")
+            day_compare(t, {base: base, "ⓐ": "ⓐ", n: n})
+    hum_names = [n for n in names if n in HUM]
+    if hum_names:
+        print("\n[M4] 습도 고정 시험 — 같은 사진에 습도만 50 → 90%로 올리면 예측 × (1보다 작아야 한다)")
+        for n in hum_names:
+            info = json.loads((cnn.OUT / f"percam_{n}" / "info.json").read_text(encoding="utf-8"))
+            e = pd.Series({c: v["effect_50_90"] for c, v in info["hum_w"].items()})
+            print(f"  {n:18} 중앙값 ×{e.median():.3f}, 범위 ×{e.min():.3f}~×{e.max():.3f}, 내려가는 카메라 {int((e < 1).sum())}/{len(e)}대")
     print(f"\n저장: {cnn.OUT / 'pred_test_percam.csv'}")
+
+
+def run_label(run):
+    """통합 모델 폴더 이름 → 표 이름. incheon_log_top60_h-phys_1019 → ⓑ+습도phys, incheon_log_top60_1019_lr3e-05 → ⓑ(lr3e-05)"""
+    rest = run.removeprefix(BASE)
+    hum = rest.split("_h-")[1].split("_")[0] if "_h-" in rest else ""
+    rest = rest.replace(f"_h-{hum}", "") if hum else rest
+    name = "ⓑ" if rest.startswith("_1019") else "ⓐ" if rest == "" else run
+    lr = rest.split("_lr")[1] if "_lr" in rest else ""
+    return name + (f"+습도{hum}" if hum else "") + (f"(lr{lr})" if lr else "")
 
 
 def main():

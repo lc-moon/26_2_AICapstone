@@ -16,6 +16,7 @@
 #     ②가 0.1 넘게 좋을 때만 ② (11/3 바꿈. 처음엔 맞추는 기간 안 하루씩 빼기로 하나만 골랐다. 그 결과는 참고로 출력한다)
 #   - 맞추는 기간에 없는 카메라는 보정하지 않는다
 import argparse
+import math
 import json
 import sys
 from pathlib import Path
@@ -118,9 +119,13 @@ def day_compare(t, cols, n_boot=5000):
     mae = sums[pick].sum(1) / counts[pick].sum(1)[:, None]          # 뽑을 때마다 사진 수만큼 가중한 MAE
     daily = by_day.mean()
     for i, j in [(1, 0), (2, 0), (2, 1)]:
-        lo, hi = np.percentile(mae[:, i] - mae[:, j], [2.5, 97.5])
-        wins = int((daily[names[i]] < daily[names[j]]).sum())
-        print(f"{names[i]} − {names[j]}: 이긴 날 {wins}/{len(daily)}, MAE 차이 95% 범위 {lo:+.2f} ~ {hi:+.2f}")
+        diff = mae[:, i] - mae[:, j]
+        lo, hi = np.percentile(diff, [2.5, 97.5])
+        wins, n = int((daily[names[i]] < daily[names[j]]).sum()), len(daily)
+        chance = sum(math.comb(n, k) for k in range(wins, n + 1)) / 2 ** n      # 실력이 같을 때(동전 던지기) 그만큼 이길 확률
+        gap = err[names[i]].mean() - err[names[j]].mean()
+        print(f"{names[i]} − {names[j]}: MAE 차이 {gap:+.2f}, 이긴 날 {wins}/{n} (우연 확률 {chance:.2f}), "
+              f"다시 뽑아 나은 비율 {100 * (diff < 0).mean():.1f}%, 95% 범위 {lo:+.2f} ~ {hi:+.2f}")
 
 
 def main():

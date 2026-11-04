@@ -8,6 +8,9 @@
 #   python Model/cnn.py --version mixed --input top60 --weather humidity --final-only --seed 1   최종 모델만 다시 (시험지 열기 전에만)
 #   python Model/cnn.py --version incheon_log --input top60 --tag folds --folds-only   연습시험 묶음별 모델만 저장 (카메라별 "한꺼번에" 후보의 몸통)
 #   python Model/cnn.py --test [모델 ...]        저장된 최종 모델(안 주면 전부)을 시험 데이터(인천 10/20~11/1)·시험지 B(베이징)로 채점
+#   python Model/cnn.py --version incheon_log --input top60 --lr-range   학습률 범위 시험 (Hugging Face에서 출발, 상한만 본다)
+#   python Model/cnn.py --version incheon_log --input top60 --epochs 12 --tag 1019_lr3e-05 --lr 3e-5 --cv-only   연습시험만 (학습률 비교)
+#   python Model/cnn.py --version incheon_log --input top60 --epochs 12 --tag 1019 --hum phys   마지막 층에 습도 한 칸 (M4, HumNet)
 #   여러 개를 이어서 돌릴 때는 Model/run_queue.py
 #
 # 입력: data/labels/labels.csv·labels_beijing.csv, data/images/, 거르기는 베이스라인과 같다 (view_check.py·view_review.csv)
@@ -82,6 +85,7 @@ INPUTS = {             # 이름: 설명. full 말고는 모두 화면 위 글자
 }
 SHORT = {"humidity": "hum", "temperature": "temp", "wind_speed": "wind", "sun_alt": "sun"}   # 결과 폴더 이름용
 HIDDEN = 64            # 기상 모델의 판단기 수 (WeatherNet)
+HUM_KINDS = {"phys": "물리식 −log(1 − 습도/100)", "raw": "습도 그대로"}   # 습도 한 칸의 모양 (M4, 2026-11-04)
 FILL = (104, 116, 124)  # 가린 자리를 칠할 색 (BGR). 사전학습 입력의 평균색이라 표준화하면 0 = "정보 없음"
 DEV = "cuda"
 MEAN = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1) * 255
@@ -212,6 +216,48 @@ class WeatherNet(torch.nn.Module):
         return self.head(torch.cat([self.body(x), (w - self.mu) / self.sd], 1))
 
 
+def hum_feature(h, kind):
+    """습도(%) → 습도 칸 값. 물리식은 흡습 성장(빛 산란 ∝ (1 − 습도)^−γ)을 log 정답에 맞춘 모양이라 85~95%에서 커진다"""
+    h = np.asarray(h, dtype=np.float32)
+    return (-np.log1p(-np.clip(h, 0, 99.9) / 100) if kind == "phys" else h).astype(np.float32)
+
+
+class HumNet(torch.nn.Module):
+    """사진 모델의 출력(log PM2.5)에 표준화한 습도 칸 × 가중치 하나를 더한다. 마지막 층(특징 768개 → 1)에 습도 한 칸을 붙인 것과 같다.
+    가중치는 0에서 출발해 처음에는 습도 없는 모델과 같다. 판단기 층(WeatherNet)을 두지 않는 이유: 카메라당 학습 사진이 525~861장이라
+    판단기 64개면 습도로 "그날"을 알아보고 외울 수 있다. 한 칸은 숫자 1개라 그럴 수 없다 (docs/전시_준비.md M4, 2026-11-04)"""
+
+    def __init__(self, net, kind):
+        super().__init__()
+        self.net, self.kind = net, kind
+        self.w = torch.nn.Parameter(torch.zeros(1))
+        self.register_buffer("mu", torch.zeros(1))
+        self.register_buffer("sd", torch.ones(1))
+
+    def forward(self, x, h):
+        return self.net(x) + self.w * (h - self.mu) / self.sd
+
+    def fit_scale(self, feat):
+        """표준화는 공부하는 사진의 습도 칸으로만"""
+        self.mu.fill_(float(feat.mean()))
+        self.sd.fill_(float(max(feat.std(), 1e-6)))
+
+    def effect(self, lo=50, hi=90):
+        """습도 고정 시험: 같은 사진에 습도만 lo → hi%로 올리면 예측(log 정답)이 몇 배가 되나. 사진과 상관없이 가중치로 정해진다"""
+        f = hum_feature([lo, hi], self.kind)
+        return float(np.exp(self.w.item() * (f[1] - f[0]) / self.sd.item()))
+
+
+def opt_groups(model, lr, hum_lr):
+    """습도 가중치만 따로 학습률을 준다(가중치 감쇠 없음). 0에서 출발하는데 몸통·마지막 층의 학습률로는 필요한 만큼 못 간다 (11/5 계산)"""
+    named = [(n, p) for n, p in model.named_parameters() if p.requires_grad]
+    groups = [{"params": [p for n, p in named if n != "w"], "lr": lr}]
+    hum = [p for n, p in named if n == "w"]
+    if hum:
+        groups.append({"params": hum, "lr": hum_lr or lr, "weight_decay": 0.0})
+    return groups
+
+
 def make_model(bias=0.0, pretrained=True, n_weather=0):
     if n_weather:
         m = WeatherNet(n_weather, pretrained)
@@ -254,20 +300,27 @@ def predict(model, arr, rows, log, W=None):
     return np.expm1(p) if log else p
 
 
-def train(arr, d, train_rows, log, label, eval_rows=None, stop=None, weather=(), seed=SEED):
+def hum_input(d, hum):
+    return hum_feature(d.humidity.values, hum)[:, None] if hum else None
+
+
+def train(arr, d, train_rows, log, label, eval_rows=None, stop=None, weather=(), seed=SEED, hum=None, hum_lr=None):
     """train_rows로 EPOCHS바퀴 일정(1바퀴 준비 + 코사인 감소)을 따라 학습한다.
     eval_rows가 있으면 매 바퀴 그 사진들의 예측(원래 농도)을 모아 돌려주고, stop이 있으면 그 바퀴에서 멈춘다.
-    weather에 기상 칸 이름을 주면 사진 특징 옆에 붙여 함께 배운다"""
+    weather에 기상 칸 이름을 주면 사진 특징 옆에 붙여 함께 배운다. hum(phys·raw)을 주면 마지막 층에 습도 한 칸(HumNet)"""
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
     y = d.pm25.values.astype(np.float32)
     target = np.log1p(y) if log else y
-    W = d[list(weather)].values.astype(np.float32) if weather else None
+    W = d[list(weather)].values.astype(np.float32) if weather else hum_input(d, hum)
     model = make_model(float(target[train_rows].mean()), n_weather=len(weather))
     if weather:                       # 표준화는 공부하는 사진으로만
         model.mu.copy_(torch.from_numpy(W[train_rows].mean(0)))
         model.sd.copy_(torch.from_numpy(W[train_rows].std(0).clip(1e-6)))
-    opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
+    if hum:
+        model = HumNet(model, hum).to(DEV)
+        model.fit_scale(W[train_rows])
+    opt = torch.optim.AdamW(opt_groups(model, LR, hum_lr), lr=LR, weight_decay=WEIGHT_DECAY)
     steps = len(train_rows) // BATCH
     total = EPOCHS * steps
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda i: min(1.0, (i + 1) / steps) * 0.5 * (1 + math.cos(math.pi * i / total)))
@@ -288,7 +341,7 @@ def train(arr, d, train_rows, log, label, eval_rows=None, stop=None, weather=(),
             opt.step()
             sched.step()
             loss_sum += loss.detach()
-        msg = f"  [{label}] {ep:2}바퀴 학습 손실 {loss_sum.item() / steps:.3f}"
+        msg = f"  [{label}] {ep:2}바퀴 학습 손실 {loss_sum.item() / steps:.3f}" + (f"  습도 가중치 {model.w.item():+.3f}" if hum else "")
         if eval_rows is not None:
             preds.append(predict(model, arr, eval_rows, log, W))
             err, inc = np.abs(preds[-1] - y[eval_rows]), d.city.values[eval_rows] == "inc"
@@ -313,13 +366,23 @@ def inputs(d, kind):
     return {f: arr for f in ("0", "1", "2", "all")}
 
 
-def run_name(version, kind, weather, tag=""):
-    return f"{version}_{kind}" + (f"_w-{'+'.join(SHORT[c] for c in weather)}" if weather else "") + (f"_{tag}" if tag else "")
+def run_name(version, kind, weather, tag="", hum=None):
+    return (f"{version}_{kind}" + (f"_w-{'+'.join(SHORT[c] for c in weather)}" if weather else "")
+            + (f"_h-{hum}" if hum else "") + (f"_{tag}" if tag else ""))
 
 
-def run(d, arrs, version, kind, weather=(), tag="", days=(), folds_only=False):
+def run_info(version, kind, weather, hum, hum_lr, best, table, learn, days, t_start):
     use_bj, log = VERSIONS[version]
-    out = OUT / run_name(version, kind, weather, tag)
+    return {"version": version, "input": kind, "weather": list(weather), "hum": hum, "hum_lr": (hum_lr or LR) if hum else None,
+            "model": NAME, "beijing_train": use_bj, "log_target": log, "best_epoch": best,
+            "cv": table.loc[best].round(3).to_dict(), "train_photos": int(len(learn)), "train_days": list(days),
+            "batch": BATCH, "lr": LR, "max_epochs": EPOCHS, "minutes": round((time.time() - t_start) / 60, 1),
+            "finished": datetime.now().isoformat(timespec="seconds")}
+
+
+def run(d, arrs, version, kind, weather=(), tag="", days=(), folds_only=False, hum=None, hum_lr=None, cv_only=False):
+    use_bj, log = VERSIONS[version]
+    out = OUT / run_name(version, kind, weather, tag, hum)
     out.mkdir(parents=True, exist_ok=True)
     inc = d[(d.city == "inc") & (d.part != "A")]
     if days:                          # 사진 사본(캐시)은 그대로 두고 학습에 쓰는 날만 고른다
@@ -333,7 +396,8 @@ def run(d, arrs, version, kind, weather=(), tag="", days=(), folds_only=False):
     for f in ("0", "1", "2"):
         val = ev.part.isin([f"f{f}", f"b{f}"]).values
         learn = ev[~val & ((ev.city == "inc") | use_bj).values]
-        model, preds = train(arrs[f], d, learn.index.values, log, f"묶음 {f}", eval_rows=ev.index[val].values, weather=weather)
+        model, preds = train(arrs[f], d, learn.index.values, log, f"묶음 {f}", eval_rows=ev.index[val].values, weather=weather,
+                             hum=hum, hum_lr=hum_lr)
         P[:, val] = np.array(preds)
         if folds_only:                # 묶음 f를 안 본 몸통. 마지막 바퀴 상태로 저장한다 (ⓑ는 최고 바퀴가 최대 12라 최종 모델과 같은 조리법)
             torch.save(model.state_dict(), out / f"fold_{f}.pt")
@@ -353,18 +417,19 @@ def run(d, arrs, version, kind, weather=(), tag="", days=(), folds_only=False):
     pred = ev[["image", "camera_id", "scene", "captured_at", "pm_time", "pm25", "humidity", "sun_alt"]].copy()
     pred["pred"] = P[best - 1].round(2)
     pred.to_csv(out / "pred_cv.csv", index=False, encoding="utf-8-sig")
-    if folds_only:
-        print(f"저장: {out} fold_0~2.pt, 최종 모델은 만들지 않음 ({(time.time() - t_start) / 60:.1f}분)")
+    if folds_only or cv_only:
+        print(f"저장: {out} {'fold_0~2.pt, ' if folds_only else ''}최종 모델은 만들지 않음 ({(time.time() - t_start) / 60:.1f}분)")
         return
 
     learn = pd.concat([inc, bj]) if use_bj else inc
     print(f"\n[최종 모델] 인천 개발 {inc.day.nunique()}일{f' + 베이징 학습 {bj.day.nunique()}일' if use_bj else ''}로 {best}바퀴")
-    model, _ = train(arrs["all"], d, learn.index.values, log, "최종", stop=best, weather=weather)
+    model, _ = train(arrs["all"], d, learn.index.values, log, "최종", stop=best, weather=weather, hum=hum, hum_lr=hum_lr)
     torch.save(model.state_dict(), out / "model.pt")
-    info = {"version": version, "input": kind, "weather": list(weather), "model": NAME, "beijing_train": use_bj, "log_target": log, "best_epoch": best,
-            "cv": table.loc[best].round(3).to_dict(), "train_photos": int(len(learn)), "train_days": list(days),
-            "batch": BATCH, "lr": LR, "max_epochs": EPOCHS, "minutes": round((time.time() - t_start) / 60, 1),
-            "finished": datetime.now().isoformat(timespec="seconds")}
+    info = run_info(version, kind, weather, hum, hum_lr, best, table, learn, days, t_start)
+    if hum:
+        info.update(hum_w=round(model.w.item(), 4), hum_mu=round(model.mu.item(), 4), hum_sd=round(model.sd.item(), 4),
+                    hum_effect_50_90=round(model.effect(), 4))
+        print(f"습도 가중치 {model.w.item():+.4f} → 습도 고정 시험: 같은 사진에 습도만 50 → 90%면 예측 ×{model.effect():.3f}")
     (out / "info.json").write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"저장: {out} ({info['minutes']}분)")
 
@@ -374,16 +439,66 @@ def refinal(d, arrs, version, kind, weather, seed, tag=""):
     같은 출발점이면 같은 흔들림이 되풀이될 수 있어 seed를 바꾼다 (2026-10-13, mixed_top60 기상 4개 최종 모델 손실 0.28)"""
     use_bj, log = VERSIONS[version]
     out = OUT / run_name(version, kind, weather, tag)
-    info = json.loads((out / "info.json").read_text(encoding="utf-8"))
-    globals()["EPOCHS"] = info["max_epochs"]          # 학습률 일정이 최대 바퀴 수에 맞춰져 있어 연습시험 때와 같게
     inc = d[(d.city == "inc") & (d.part != "A")]
     learn = pd.concat([inc, d[(d.city == "bj") & (d.part != "B")]]) if use_bj else inc
+    if not (out / "info.json").exists():              # --cv-only로 연습시험만 돌린 뒤(학습률 비교에서 이긴 값): 바퀴는 epochs.csv로 고른다
+        table = pd.read_csv(out / "epochs.csv", encoding="utf-8-sig", index_col="epoch")
+        info = run_info(version, kind, weather, None, None, pick_epoch(table, use_bj), table, learn, (), time.time())
+    else:
+        info = json.loads((out / "info.json").read_text(encoding="utf-8"))
+    globals()["EPOCHS"] = info["max_epochs"]          # 학습률 일정이 최대 바퀴 수에 맞춰져 있어 연습시험 때와 같게
+    globals()["LR"] = info["lr"]
     print(f"\n[최종 모델 다시] {info['best_epoch']}바퀴, 최대 {EPOCHS}바퀴 일정, seed {seed}")
     model, _ = train(arrs["all"], d, learn.index.values, log, "최종", stop=info["best_epoch"], weather=weather, seed=seed)
     torch.save(model.state_dict(), out / "model.pt")
     info.update(final_seed=seed, final_redone=datetime.now().isoformat(timespec="seconds"))
     (out / "info.json").write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"저장: {out}")
+
+
+def lr_range(d, arr, steps=300, seeds=(0, 1, 2)):
+    """학습률 범위 시험 (Hugging Face에서 출발, 인천 학습 기간 전체에서 무작위 묶음). 학습률을 1e-7 → 1e-1로 키우며 손실을 기록한다.
+    이 시험은 "이보다 크면 터진다"는 상한만 알려 준다. 어느 값이 좋은지는 연습시험으로 비교한다 (2026-11-05 교훈)"""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    plt.rcParams.update({"font.family": "Malgun Gothic", "axes.unicode_minus": False})
+    lrs = np.geomspace(1e-7, 1e-1, steps)
+    rows = d[(d.city == "inc") & (d.part != "A")].index.values
+    target = np.log1p(d.pm25.values.astype(np.float32))
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    for seed in seeds:
+        torch.manual_seed(seed)
+        rng = np.random.default_rng(seed)
+        model = make_model(float(target[rows].mean()))
+        model.train()
+        opt = torch.optim.AdamW(model.parameters(), lr=lrs[0], weight_decay=WEIGHT_DECAY)
+        losses, smooth = [], None
+        for i, lr in enumerate(lrs):
+            for g in opt.param_groups:
+                g["lr"] = lr
+            r = rng.choice(rows, BATCH)
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                out = model(augment(batch(arr, r))).squeeze(1).float()
+            loss = F.l1_loss(out, torch.from_numpy(target[r]).to(DEV))
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+            opt.step()
+            smooth = loss.item() if smooth is None else 0.95 * smooth + 0.05 * loss.item()
+            losses.append(smooth)
+            if i > 30 and smooth > 3 * min(losses):
+                break
+        ax.plot(lrs[:len(losses)], losses, label=f"출발 {seed}")
+        print(f"  출발 {seed}: {len(losses)}걸음, 가장 낮은 손실 {min(losses):.3f} (학습률 {lrs[int(np.argmin(losses))]:.0e})", flush=True)
+        del model, opt
+        torch.cuda.empty_cache()
+    ax.axvline(LR, color="gray", ls="--", label=f"지금 값 {LR:.0e}")
+    ax.set(xscale="log", title="ⓑ 학습률 범위 시험 (HF 출발, 인천 학습 기간)", xlabel="학습률", ylabel="손실 (log 정답 절대오차, 이동평균)")
+    ax.legend()
+    fig.tight_layout()
+    path = ROOT / "data/review/lr_range_b.png"
+    fig.savefig(path, dpi=110)
+    print(f"저장: {path}")
 
 
 def test(d, names):
@@ -394,10 +509,14 @@ def test(d, names):
     for r in runs:
         info = json.loads((r / "info.json").read_text(encoding="utf-8"))
         arr = inputs(d, info["input"])["all"]
-        weather = info.get("weather", [])
+        weather, hum = info.get("weather", []), info.get("hum")
         model = make_model(pretrained=False, n_weather=len(weather))
+        if hum:
+            model = HumNet(model, hum).to(DEV)
         model.load_state_dict(torch.load(r / "model.pt", map_location=DEV))
-        W = d[weather].values.astype(np.float32) if weather else None
+        W = d[weather].values.astype(np.float32) if weather else hum_input(d, hum)
+        if hum:
+            print(f"{r.name}: 습도 가중치 {model.w.item():+.4f}, 습도 고정 시험 50 → 90% 예측 ×{model.effect():.3f}")
         for sheet in ("A", "B"):
             part = d[d.part == sheet]
             p = predict(model, arr, part.index.values, info["log_target"], W)
@@ -425,10 +544,18 @@ def main():
     ap.add_argument("--tag", default="", help="결과 폴더 이름 끝에 붙일 꼬리표. 같은 설정을 다른 기간으로 다시 학습할 때 옛 폴더를 덮어쓰지 않게 (예: --tag 1019)")
     ap.add_argument("--days", nargs="*", default=[], help="인천 학습에 쓸 날만 (예: --days 2026-10-10 2026-10-11). 안 주면 학습 기간 전체")
     ap.add_argument("--folds-only", action="store_true", help="연습시험 묶음별 모델(fold_0~2.pt)만 저장하고 최종 모델은 만들지 않는다")
+    ap.add_argument("--cv-only", action="store_true", help="연습시험만 하고 최종 모델은 만들지 않는다(학습률 비교). 이긴 값은 --final-only로 최종 모델")
+    ap.add_argument("--lr", type=float, default=LR, help=f"학습률 (기본 {LR})")
+    ap.add_argument("--lr-range", action="store_true", help="학습률 범위 시험 그래프 (data/review/lr_range_b.png). 상한만 본다")
+    ap.add_argument("--hum", choices=list(HUM_KINDS), help="마지막 층에 습도 한 칸: " + ", ".join(f"{k} = {v}" for k, v in HUM_KINDS.items()))
+    ap.add_argument("--hum-lr", type=float, help="습도 가중치의 학습률 (기본 = --lr)")
     args = ap.parse_args()
     if args.test is None and not args.version:
         ap.error("--version 또는 --test 를 주세요")
+    if args.hum and args.weather:
+        ap.error("--hum과 --weather는 같이 쓰지 않는다")
     globals()["EPOCHS"] = args.epochs
+    globals()["LR"] = args.lr
 
     # 메모리가 넘치면 Windows는 오류 대신 PC 메모리를 빌려 수십 배 느려진다. 그 전에 오류가 나게 상한을 둔다
     torch.cuda.set_per_process_memory_fraction(0.8)
@@ -436,11 +563,16 @@ def main():
     d = load()
     if args.test is not None:
         test(d, args.test)
+    elif args.lr_range:
+        lr_range(d, inputs(d, args.input)["all"])
     elif args.final_only:
         refinal(d, inputs(d, args.input), args.version, args.input, tuple(args.weather), args.seed, args.tag)
     else:
         print(f"입력: {args.input} — {INPUTS[args.input]}{', 기상: ' + ' '.join(args.weather) if args.weather else ''}, 최대 {EPOCHS}바퀴")
-        run(d, inputs(d, args.input), args.version, args.input, tuple(args.weather), args.tag, args.days, args.folds_only)
+        if args.hum:
+            print(f"습도 한 칸: {HUM_KINDS[args.hum]}, 습도 가중치 학습률 {args.hum_lr or LR}")
+        run(d, inputs(d, args.input), args.version, args.input, tuple(args.weather), args.tag, args.days, args.folds_only,
+            args.hum, args.hum_lr, args.cv_only)
 
 
 if __name__ == "__main__":

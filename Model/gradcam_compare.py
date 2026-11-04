@@ -20,26 +20,34 @@ import per_camera
 from gradcam import cam_maps
 from roi import box as roi_box
 
-MODELS = [("ⓐ", "incheon_log_top60"), ("ⓑ", "incheon_log_top60_1019"), ("C", "incheon_log_top60_c14"),
-          ("①", "percam_hf"), ("②-전체", "percam_from_a"), ("②-마지막 층", "percam_from_a_head"),
-          ("③-전체", "percam_from_b"), ("③-마지막 층", "percam_from_b_head")]
+# M4 판정용 (2026-11-05): 습도 후보 3개와 그 짝. 습도 칸은 사진과 상관없이 더해지는 숫자라 Grad-CAM은 짝과 같고(마지막 층만이면 ⓐ와 같다),
+# 몸통까지 학습한 후보만 달라질 수 있다. 예측 숫자는 습도까지 넣어 낸다. 통합 모델 + 습도(incheon_log_top60_h-*)는 있는 대로 붙인다
+MODELS = [("ⓐ", "incheon_log_top60"), ("ⓑ", "incheon_log_top60_1019"),
+          ("②-전체 1e-5", "percam_from_a_1e5"), ("②-전체+습도 물리식", "percam_from_a_1e5_hphys"), ("②-전체+습도 그대로", "percam_from_a_1e5_hraw"),
+          ("②-마지막 층", "percam_from_a_head"), ("②-마지막 층+습도 물리식", "percam_from_a_head_hphys"), ("②-마지막 층+습도 그대로", "percam_from_a_head_hraw")]
 OUT = cnn.ROOT / "data/review/gradcam_compare.html"
 WIDTH = 320
 
 
 def models():
-    """(표시 이름, 카메라 → 모델을 주는 함수) 중 저장된 것만"""
+    """(표시 이름, 카메라 → 모델을 주는 함수, 습도 모양) 중 저장된 것만"""
     found = []
-    for label, run in MODELS:
+    extra = [(per_camera.run_label(p.parent.name), p.parent.name) for p in sorted(cnn.OUT.glob("incheon_log_top60_*/model.pt"))
+             if "_h-" in p.parent.name or "_lr" in p.parent.name]
+    for label, run in MODELS + extra:
         if run.startswith("percam_"):
             name = run.removeprefix("percam_")
             if (cnn.OUT / run / "info.json").exists():
                 cams = set(json.loads((cnn.OUT / run / "info.json").read_text(encoding="utf-8"))["cameras"])
-                found.append((label, lambda c, n=name, cams=cams: per_camera.load_cam_model(n, c) if c in cams else None))
+                found.append((label, lambda c, n=name, cams=cams: per_camera.load_cam_model(n, c) if c in cams else None,
+                              per_camera.HUM.get(name, (None,))[0]))
         elif (cnn.OUT / run / "model.pt").exists():
+            hum = json.loads((cnn.OUT / run / "info.json").read_text(encoding="utf-8")).get("hum")
             m = cnn.make_model(pretrained=False)
+            if hum:
+                m = cnn.HumNet(m, hum).to(cnn.DEV)
             m.load_state_dict(torch.load(cnn.OUT / run / "model.pt", map_location=cnn.DEV))
-            found.append((label, lambda c, m=m: m))
+            found.append((label, lambda c, m=m: m, hum))
     return found
 
 
@@ -71,28 +79,28 @@ def main():
         picks += [(c, "가장 낮음", g.loc[g.pm25.idxmin()]), (c, "가장 높음", g.loc[g.pm25.idxmax()])]
 
     ms = models()
-    print("모델:", ", ".join(label for label, _ in ms))
+    print("모델:", ", ".join(label for label, _, _ in ms))
     cells = {}          # (카메라, 낮음/높음, 모델) → (지도, 예측)
-    for label, get in ms:
+    for label, get, hum in ms:
         for c in sorted({p[0] for p in picks}):
             model = get(c)
             if model is None:
                 continue
             model.eval()
             rows = np.array([r.name for cc, _, r in picks if cc == c])
-            maps = cam_maps(model, arr, rows)
-            preds = cnn.predict(model, arr, rows, True)
+            maps = cam_maps(getattr(model, "net", model), arr, rows)       # 습도 칸은 사진과 무관한 덧셈이라 지도는 사진 모델로
+            preds = cnn.predict(model, arr, rows, True, cnn.hum_input(d, hum))
             for (cc, kind, _), mp, pr in zip([p for p in picks if p[0] == c], maps, preds):
                 cells[(cc, kind, label)] = (mp, float(pr))
         print(f"  {label} 끝", flush=True)
         torch.cuda.empty_cache()
 
     b = roi_box({}, None, "top60")
-    head = "".join(f"<th>{label}</th>" for label, _ in ms)
+    head = "".join(f"<th>{label}</th>" for label, _, _ in ms)
     body = []
     for c, kind, r in picks:
         tds = [f'<td><img src="data:image/jpeg;base64,{tile(r, None, b)}"><br>{r.captured_at[5:16]} · 실측 {r.pm25:.0f}</td>']
-        for label, _ in ms:
+        for label, _, _ in ms:
             if (c, kind, label) in cells:
                 mp, pr = cells[(c, kind, label)]
                 tds.append(f'<td><img src="data:image/jpeg;base64,{tile(r, mp, b)}"><br>예측 {pr:.1f} ({pr - r.pm25:+.1f})</td>')
