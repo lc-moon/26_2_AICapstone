@@ -6,6 +6,7 @@
 #   python Model/cnn.py --version mixed --input sky    입력 종류 (기본 masked = 사진 전체 + 글자 가림). INPUTS 참고
 #   python Model/cnn.py --version mixed --input sky --weather humidity sun_alt --epochs 12   기상을 사진 특징 옆에 붙임
 #   python Model/cnn.py --version mixed --input top60 --weather humidity --final-only --seed 1   최종 모델만 다시 (시험지 열기 전에만)
+#   python Model/cnn.py --version incheon_log --input top60 --tag folds --folds-only   연습시험 묶음별 모델만 저장 (카메라별 "한꺼번에" 후보의 몸통)
 #   python Model/cnn.py --test [모델 ...]        저장된 최종 모델(안 주면 전부)을 시험 데이터(인천 10/20~11/1)·시험지 B(베이징)로 채점
 #   여러 개를 이어서 돌릴 때는 Model/run_queue.py
 #
@@ -316,7 +317,7 @@ def run_name(version, kind, weather, tag=""):
     return f"{version}_{kind}" + (f"_w-{'+'.join(SHORT[c] for c in weather)}" if weather else "") + (f"_{tag}" if tag else "")
 
 
-def run(d, arrs, version, kind, weather=(), tag="", days=()):
+def run(d, arrs, version, kind, weather=(), tag="", days=(), folds_only=False):
     use_bj, log = VERSIONS[version]
     out = OUT / run_name(version, kind, weather, tag)
     out.mkdir(parents=True, exist_ok=True)
@@ -332,8 +333,10 @@ def run(d, arrs, version, kind, weather=(), tag="", days=()):
     for f in ("0", "1", "2"):
         val = ev.part.isin([f"f{f}", f"b{f}"]).values
         learn = ev[~val & ((ev.city == "inc") | use_bj).values]
-        _, preds = train(arrs[f], d, learn.index.values, log, f"묶음 {f}", eval_rows=ev.index[val].values, weather=weather)
+        model, preds = train(arrs[f], d, learn.index.values, log, f"묶음 {f}", eval_rows=ev.index[val].values, weather=weather)
         P[:, val] = np.array(preds)
+        if folds_only:                # 묶음 f를 안 본 몸통. 마지막 바퀴 상태로 저장한다 (ⓑ는 최고 바퀴가 최대 12라 최종 모델과 같은 조리법)
+            torch.save(model.state_dict(), out / f"fold_{f}.pt")
     ev = ev.reset_index(drop=True)
     is_inc = (ev.city == "inc").values
     rows = []
@@ -350,6 +353,9 @@ def run(d, arrs, version, kind, weather=(), tag="", days=()):
     pred = ev[["image", "camera_id", "scene", "captured_at", "pm_time", "pm25", "humidity", "sun_alt"]].copy()
     pred["pred"] = P[best - 1].round(2)
     pred.to_csv(out / "pred_cv.csv", index=False, encoding="utf-8-sig")
+    if folds_only:
+        print(f"저장: {out} fold_0~2.pt, 최종 모델은 만들지 않음 ({(time.time() - t_start) / 60:.1f}분)")
+        return
 
     learn = pd.concat([inc, bj]) if use_bj else inc
     print(f"\n[최종 모델] 인천 개발 {inc.day.nunique()}일{f' + 베이징 학습 {bj.day.nunique()}일' if use_bj else ''}로 {best}바퀴")
@@ -418,6 +424,7 @@ def main():
     ap.add_argument("--seed", type=int, default=SEED, help=f"--final-only의 출발점 번호 (기본 {SEED})")
     ap.add_argument("--tag", default="", help="결과 폴더 이름 끝에 붙일 꼬리표. 같은 설정을 다른 기간으로 다시 학습할 때 옛 폴더를 덮어쓰지 않게 (예: --tag 1019)")
     ap.add_argument("--days", nargs="*", default=[], help="인천 학습에 쓸 날만 (예: --days 2026-10-10 2026-10-11). 안 주면 학습 기간 전체")
+    ap.add_argument("--folds-only", action="store_true", help="연습시험 묶음별 모델(fold_0~2.pt)만 저장하고 최종 모델은 만들지 않는다")
     args = ap.parse_args()
     if args.test is None and not args.version:
         ap.error("--version 또는 --test 를 주세요")
@@ -433,7 +440,7 @@ def main():
         refinal(d, inputs(d, args.input), args.version, args.input, tuple(args.weather), args.seed, args.tag)
     else:
         print(f"입력: {args.input} — {INPUTS[args.input]}{', 기상: ' + ' '.join(args.weather) if args.weather else ''}, 최대 {EPOCHS}바퀴")
-        run(d, inputs(d, args.input), args.version, args.input, tuple(args.weather), args.tag, args.days)
+        run(d, inputs(d, args.input), args.version, args.input, tuple(args.weather), args.tag, args.days, args.folds_only)
 
 
 if __name__ == "__main__":

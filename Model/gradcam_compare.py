@@ -3,7 +3,7 @@
 #   python Model/gradcam_compare.py      → data/review/gradcam_compare.html (원본 사진이 들어 있으니 저장소·외부에 올리지 말 것)
 #
 # 카메라 20대 모두, 시험 기간(10/20~11/1) 사진 중 실측이 가장 낮은 것과 가장 높은 것 1장씩 (docs/전시_준비.md M3).
-# 모델은 통합 ⓐ·ⓑ·C와 카메라별 ①·②-전체·②-마지막 층 중 저장된 것만. 카메라별 모델은 그 카메라의 모델로 그린다.
+# 모델은 통합 ⓐ·ⓑ·C와 카메라별 ①·②·③(전체·마지막 층) 중 저장된 것만. 카메라별 모델은 그 카메라의 모델로 그린다.
 # 모델은 위쪽 60%만 보므로 지도도 그 영역에만 겹치고, 보지 않는 아래 40%는 어둡게 한다. 화면 위 글자는 모델이 본 대로 가린다.
 # 빨강 = 예측을 올리는 쪽으로 많이 본 곳. 하늘·먼 건물이 아니라 그림자·가까운 나무·특정 물체에 몰리면 지름길로 의심한다.
 # GPU를 쓰므로 학습과 동시에 돌리지 않는다.
@@ -21,7 +21,8 @@ from gradcam import cam_maps
 from roi import box as roi_box
 
 MODELS = [("ⓐ", "incheon_log_top60"), ("ⓑ", "incheon_log_top60_1019"), ("C", "incheon_log_top60_c14"),
-          ("①", "percam_hf"), ("②-전체", "percam_from_a"), ("②-마지막 층", "percam_from_a_head")]
+          ("①", "percam_hf"), ("②-전체", "percam_from_a"), ("②-마지막 층", "percam_from_a_head"),
+          ("③-전체", "percam_from_b"), ("③-마지막 층", "percam_from_b_head")]
 OUT = cnn.ROOT / "data/review/gradcam_compare.html"
 WIDTH = 320
 

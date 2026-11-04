@@ -66,7 +66,7 @@ C:\26_2_AICapstone\
 │  ├─ cnn.py               ConvNeXt V2-Tiny 미세조정 (인천 ver / 인천 log ver / 인천+베이징 ver) → data\model\cnn\
 │  ├─ run_queue.py         cnn.py 여러 개를 이어서 실행 (실패해도 다음 진행, 절전 방지, 기록 파일)
 │  ├─ calibrate.py         카메라별 보정(M2): 저장된 예측에 카메라마다 절편(또는 기울기+절편)을 얹어 시험 데이터로 채점
-│  ├─ per_camera.py        카메라별 모델(M3): Hugging Face 또는 ⓐ에서 출발해 카메라마다 학습, 통합 모델·보정과 나란히 채점
+│  ├─ per_camera.py        카메라별 모델(M3): Hugging Face·ⓐ·ⓑ에서 출발해 카메라마다 학습, 통합 모델·보정과 나란히 채점
 │  ├─ gradcam_compare.py   같은 사진에서 모델마다 본 곳을 나란히 (M3 지름길 검사) → data\review\gradcam_compare.html
 │  ├─ text_mask.py         화면 위 글자(시각·지명) 자리 찾기 → text_mask\ (CNN 입력에서 평균색으로 가림)
 │  ├─ text_mask\           장면마다 글자 자리 (한 번 만들고 눈으로 확인한 것)
@@ -233,7 +233,9 @@ python Model\cnn.py --test incheon_log_top60   저장된 CNN을 시험 데이터
 python Model\calibrate.py incheon_log_top60    카메라별 보정 — 시험 밖 날짜로 맞추고 시험 데이터로 채점 (--test를 먼저)
 python Model\per_camera.py hf from_a from_a_head   카메라별 모델 3후보 학습 (① Hugging Face 출발 / ②-전체 / ②-마지막 층, 합쳐 약 3시간)
 python Model\per_camera.py --test              카메라별 모델을 시험 데이터로 채점 (ⓐ·ⓑ·보정과 나란히, 회차 상관 포함)
-python Model\per_camera.py --lr-range          학습률 범위 시험 그래프 → data\review\lr_range.png (약 5분). --lr hf=3e-5 처럼 후보별 학습률을 바꿀 수 있다
+python Model\per_camera.py --lr-range from_b from_b_head   학습률 범위 시험 그래프 → data\review\lr_range*.png (후보당 약 3분, 안 주면 전부). --lr hf=3e-5 처럼 후보별 학습률을 바꿀 수 있다
+python Model\cnn.py --version incheon_log --input top60 --tag folds --folds-only   ⓑ와 같은 조리법의 연습시험 묶음별 몸통만 저장 (③ "한꺼번에" 후보의 연습시험용)
+python Model\per_camera.py from_b from_b_head  ③ "한꺼번에": ⓑ에서 출발해 같은 28일로 카메라마다 (위 --folds-only를 먼저)
 python Model\cnn.py --version incheon_log --input top60 --epochs 12 --tag c14 --days 2026-10-10 2026-10-11 ...   인천 학습 날짜를 골라서 (원인 가르기 실험 C)
 python Model\gradcam_compare.py                같은 사진에서 모델마다 본 곳을 나란히 → data\review\gradcam_compare.html
 python Model\run_queue.py "--version incheon_log" "--version mixed"   여러 개를 이어서 (기록: data\model\cnn\run_log.txt). "per_camera.py hf"처럼 첫 낱말이 .py면 그 스크립트를 돌린다
