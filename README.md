@@ -241,7 +241,7 @@ python Model\gradcam_compare.py                같은 사진에서 모델마다 
 python Model\cnn.py --version incheon_log --input top60 --lr-range   ⓑ 학습률 범위 시험 → data\review\lr_range_b.png (상한만 본다. 고르기는 연습시험으로)
 python Model\cnn.py --version incheon_log --input top60 --epochs 12 --tag 1019_lr3e-05 --lr 3e-5 --cv-only   학습률 비교용 연습시험만. 이긴 값은 같은 인자 + --final-only로 최종 모델
 python Model\cnn.py --version incheon_log --input top60 --epochs 12 --tag 1019 --hum phys   M4 ⓑ+습도: 마지막 층에 습도 한 칸(phys 물리식 / raw 그대로, --hum-lr로 습도 가중치 학습률)
-python Model\per_camera.py from_a_head_hphys from_a_head_hraw from_a_1e5_hphys from_a_1e5_hraw   M4 카메라별+습도 (습도 가중치 학습률 3e-3). --test가 습도 없는 짝과 비교·습도 고정 시험까지 낸다
+python Model\per_camera.py from_a_head_hphys from_a_head_hraw from_a_1e5_hphys from_a_1e5_hraw   M4 카메라별+습도 (습도 가중치 학습률 1e-2). --test가 습도 없는 짝과 비교·습도 고정 시험까지 낸다
 python Model\run_queue.py "--version incheon_log" "--version mixed"   여러 개를 이어서 (기록: data\model\cnn\run_log.txt). "per_camera.py hf"처럼 첫 낱말이 .py면 그 스크립트를 돌린다
 python Model\text_mask.py               글자 자리 다시 찾기 (새 카메라·해상도가 생겼을 때) → data\review\text_mask_*.jpg로 확인
 python Model\roi.py                     ROI 상자 그리기 페이지 → data\review\roi.html (브라우저로 열어 그린 뒤 [저장])

@@ -63,8 +63,9 @@ CANDIDATES = {                 # 이름: (출발점, 학습 기간, 마지막 �
 # 습도 후보: 이름 → (모양, 습도 가중치 학습률, 습도 없는 짝).
 # 학습률 3e-3은 11/5 계산: 연습시험 예측의 log 잔차를 표준화한 습도 칸으로 회귀하면 카메라 90%가 |가중치| 0.085 이내.
 # 카메라당 약 23걸음 × 바퀴라 3~10바퀴 어디서 멈춰도 그 거리의 2~4배를 갈 수 있는 값. 후보의 학습률(3e-4·1e-5)로는 0.03·0.001밖에 못 간다
-HUM = {"from_a_head_hphys": ("phys", 3e-3, "from_a_head"), "from_a_head_hraw": ("raw", 3e-3, "from_a_head"),
-       "from_a_1e5_hphys": ("phys", 3e-3, "from_a_1e5"), "from_a_1e5_hraw": ("raw", 3e-3, "from_a_1e5")}
+# 11/5 바꿈 3e-3 → 1e-2: 실제 길이로 돌려 보니 기울기 잡음 때문에 계산보다 덜 갔다. 3e-3·1e-2·3e-2 중 학습된 w ÷ 목표의 중앙값이 1에 가장 가까운 값(1.06)
+HUM = {"from_a_head_hphys": ("phys", 1e-2, "from_a_head"), "from_a_head_hraw": ("raw", 1e-2, "from_a_head"),
+       "from_a_1e5_hphys": ("phys", 1e-2, "from_a_1e5"), "from_a_1e5_hraw": ("raw", 1e-2, "from_a_1e5")}
 
 
 def unseen_days(d):
