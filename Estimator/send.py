@@ -19,7 +19,7 @@ import requests
 ROOT = Path(__file__).resolve().parent.parent
 ESTIMATES = ROOT / "data/estimates/estimates.csv"
 SENT = ROOT / "data/estimates/sent.txt"
-MODEL = "incheon_log_top60"     # estimate.py의 MODEL과 같게. 2시간 안의 행은 늘 지금 모델 값이다
+MODEL = "incheon_log_top60_h-phys_1019_lr3e-05"     # estimate.py의 MODEL과 같게. 2시간 안의 행은 늘 지금 모델 값이다
 LOOKBACK = timedelta(hours=2)
 KST = timezone(timedelta(hours=9))
 

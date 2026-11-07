@@ -38,8 +38,9 @@ LOG = ROOT / "data/logs/capture_log.csv"
 IMAGES = ROOT / "data/images"
 MASKS = ROOT / "Model/text_mask"
 STATIONS = Path(__file__).with_name("stations.json")
-MODEL = "incheon_log_top60"                     # 인천 ver 최종 (⑤ 위쪽 60%, 기상 없음). 2026-10-15 인천+베이징 ver(mixed_top60_w-hum)에서 교체
-                                                # — 인천에서는 인천 ver가 같거나 낫고, 베이징 학습의 이점이 인천 고농도에서 확인되지 않음(현황 §7)
+MODEL = "incheon_log_top60_h-phys_1019_lr3e-05"  # ⓑ'+습도 물리식 (9/22~10/19 28일, 학습률 3e-5, 마지막 층에 습도 한 칸). 2026-11-07 교체
+                                                # — 시험 10/20~11/1 MAE 3.61 → 2.91, 습도 70% 이상 치우침 +2.55 → −0.77 (docs/전시_준비.md M4)
+                                                # 그전: 10/15~11/7 인천 ver incheon_log_top60, 10/13~10/15 인천+베이징 ver mixed_top60_w-hum
                                                 # 바꿀 때 send.py의 MODEL도 같이 (백엔드에 보내는 모델 이름)
 ONNX_DIR = ROOT / "data/model/onnx"
 OUT = ROOT / "data/estimates"
