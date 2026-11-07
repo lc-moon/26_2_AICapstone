@@ -2,6 +2,7 @@
 #
 #   python Model/gradcam_pairs.py              → data/review/m6/{카메라}.png (20대) + data/review/m6/index.html (한눈에 고르기용)
 #   python Model/gradcam_pairs.py --run 모델    다른 통합 모델로 (기본: 서비스 모델 ⓑ'+습도 물리식)
+#   python Model/gradcam_pairs.py --stack 103   위에 원래 사진 두 장, 아래에 지도 두 장 → data/review/m6/103_stack.png (원리 페이지용)
 #
 # 사진 고르기: 시험 기간(10/20~11/1, 모델이 배우지 않은 날)에서 카메라마다 실측이 가장 높은 사진을 "탁한 날"로 고르고,
 # 그 시각 ±1시간 안의 다른 날 사진 중 실측이 가장 낮은 것을 "맑은 날"로 고른다(해 높이·그림자를 비슷하게).
@@ -68,6 +69,7 @@ def picture(row, heat, b):
 def main():
     ap = argparse.ArgumentParser(description="전시용 Grad-CAM: 맑은 날·탁한 날 나란히 (M6)")
     ap.add_argument("--run", default=SERVICE)
+    ap.add_argument("--stack", nargs="*", default=[], help="2×2 그림(위 원래 사진, 아래 지도)도 만들 카메라")
     args = ap.parse_args()
     torch.cuda.set_per_process_memory_fraction(0.8)
     info = json.loads((cnn.OUT / args.run / "info.json").read_text(encoding="utf-8"))
@@ -101,6 +103,21 @@ def main():
         path = OUT / f"{c}.png"
         fig.savefig(path)
         plt.close(fig)
+        if c in args.stack:   # 지도는 파랗게 덮여 맨눈으로 흐린지 안 보이므로, 같은 사진을 위에 그대로 둔다
+            fig, axes = plt.subplots(2, 2, figsize=(12, 7.2), dpi=110)
+            for j, (r, title) in enumerate(zip((clear, hazy), ("맑은 날", "탁한 날"))):
+                m, p = got[r.name]
+                axes[0, j].imshow(picture(r, None, b))
+                axes[0, j].set_title(f"{title} · {r.captured_at[5:16]}   실측 {r.pm25:.0f}  ·  추정 {p:.1f} ㎍/㎥  ·  습도 {r.humidity:.0f}%", fontsize=10)
+                axes[1, j].imshow(picture(r, m, b))
+                for ax in axes[:, j]:
+                    ax.axis("off")
+            axes[0, 0].text(-0.02, 0.5, "원래 사진", transform=axes[0, 0].transAxes, rotation=90, ha="right", va="center", fontsize=11)
+            axes[1, 0].text(-0.02, 0.5, "모델이 본 곳", transform=axes[1, 0].transAxes, rotation=90, ha="right", va="center", fontsize=11)
+            fig.suptitle(f"{c}번 카메라 — 아래: 모델이 많이 본 곳(빨강). 아래 40%는 모델이 보지 않는 곳(가림)", fontsize=11)
+            fig.tight_layout()
+            fig.savefig(OUT / f"{c}_stack.png")
+            plt.close(fig)
         cards.append(f'<figure><img src="data:image/png;base64,{base64.b64encode(path.read_bytes()).decode()}"><figcaption>{c}번</figcaption></figure>')
         print(f"{c}: 맑은 날 {clear.captured_at[5:16]} 실측 {clear.pm25:.0f} 추정 {got[clear.name][1]:.1f} / "
               f"탁한 날 {hazy.captured_at[5:16]} 실측 {hazy.pm25:.0f} 추정 {got[hazy.name][1]:.1f}", flush=True)
