@@ -99,7 +99,8 @@ C:\26_2_AICapstone\
 │  └─ mockup\             서비스 화면 시안 (docs/서비스_구상.md). index.html 더블클릭으로 열림
 │     ├─ index.html          지도·구름·클릭 패널
 │     ├─ incheon_inland.js   인천 내륙 경계 (make_mockup_boundary.py가 생성)
-│     └─ sample.js           10/16 13:20 실제 추정값과 측정소 위치
+│     ├─ sample.js           10/16 13:20 실제 추정값과 측정소 위치
+│     └─ 근거위치\            지점을 고르면 가까운 측정소·CCTV 자리를 표시하는 시안(서비스 저장소 web/에 붙여 씀, docs/전시_준비.md F8)
 │
 ├─ model_output\        조원에게 넘기는 데이터 (git 포함)
 │  ├─ cameras.json         카메라 번호·이름·좌표

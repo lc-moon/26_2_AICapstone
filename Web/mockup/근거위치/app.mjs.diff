@@ -1,0 +1,44 @@
+--- web/app.mjs (PR 13)
++++ web/app.mjs (시안 연결)
+@@ -2,11 +2,12 @@
+ import {mountSearch} from './search.mjs';
+ import {mountInference} from './infer.mjs';
+ import {renderEvidence} from './evidence.mjs';
++import {initStationProto,showStation,clearStation,stationBadge,openTarget} from './proto-station.mjs';
+ import {GRADES,gradeOf,rgb,validValue,inside,gridLayout,cellAt,validateFrame,frameChanged,formatTime} from './core.mjs';
+ import {cloudImage,veilImage} from './render.mjs';
+ const $=id=>document.getElementById(id), params=new URLSearchParams(location.search);
+ $('about-link').href=`about.html${location.search}`;
+-const expo=params.get('expo')==='1';
++const expo=params.get('expo')==='1', proto=params.get('proto')==='station';
+ const mock=params.get('mode')==='mock', scenario=params.get('scenario')||'day';
+ // API base is explicit; production defaults to same-origin and never silently uses mocks.
+ const base=(params.get('api')||'').replace(/\/$/,'');
+@@ -56,6 +57,7 @@
+ function displayPoint(data){
+  renderEvidence($('details'),data,{mock,base});
+  if(expo&&data.estimate?.source!=='cctv')$('details').prepend(text('p','전시용 CCTV 상세 미지원 · 응답에 표시된 기준 시각과 출처를 확인해 주세요.','expo-note'));
++ if(proto){stationBadge($('details'),data.station);showStation(map,selection,data);}
+  if(data.camera)disposeInference=mountInference($('details').querySelector('.evidence-camera'),data.camera,{mock,base,scenario},value=>{inferenceBusy=value;});
+ }
+ async function getPoint(p){
+@@ -76,7 +78,7 @@
+   if(!data.inside){$('details').replaceChildren(text('p','서비스 범위 밖입니다.'));return;}displayPoint(data);if(fly)settle();
+  }catch{if(request===pointRequest)$('details').replaceChildren(text('div','상세 조회 실패','place'),text('p','연결을 확인하고 지도에서 다시 선택해 주세요.'));}
+ }
+-function closePanel(){disposeInference();selection=null;pointRequest++;$('panel').hidden=true;$('hint').hidden=false;map?.getSource('pick')?.setData(empty);}
++function closePanel(){disposeInference();if(proto)clearStation();selection=null;pointRequest++;$('panel').hidden=true;$('hint').hidden=false;map?.getSource('pick')?.setData(empty);}
+ function fitZoom(center,pad){const save={center:map.getCenter(),zoom:map.getZoom(),pitch:map.getPitch(),bearing:map.getBearing(),padding:map.getPadding()},pts=grid.boundary.coordinates.flat(2),c=map.getCanvas(),W=c.clientWidth,H=c.clientHeight;let lo=8,hi=15;for(let i=0;i<18;i++){const z=(lo+hi)/2;map.jumpTo({center,zoom:z,pitch:40,bearing:-12,padding:{top:0,bottom:0,left:0,right:0}});pts.every(p=>{const q=map.project(p);return q.x>=pad.left&&q.x<=W-pad.right&&q.y>=pad.top&&q.y<=H-pad.bottom})?lo=z:hi=z;}map.jumpTo(save);return lo;}function panelPad(estimate){const p=$('panel');return matchMedia('(max-width:700px)').matches?{top:$('legend').getBoundingClientRect().bottom,left:0,right:0,bottom:(estimate?Math.max(p.offsetHeight,innerHeight*.42):p.offsetHeight)+parseFloat(getComputedStyle(p).bottom)}:{top:0,bottom:(estimate?Math.max(p.offsetHeight,innerHeight*.35):p.offsetHeight)+parseFloat(getComputedStyle(p).bottom),left:0,right:0};}function settle(){const go=()=>{if(selection)map.easeTo({padding:panelPad(false),duration:300,essential:true});};map.isMoving()?map.once('moveend',go):go();}function closeAndCenter(){const p=selection;closePanel();if(p)map.easeTo({center:p,padding:{top:0,bottom:0,left:0,right:0},duration:motion,essential:true});}function home(){closePanel();const mobile=matchMedia('(max-width:700px)').matches,center=mobile?[126.703, 37.474]:[126.69, 37.475];map.easeTo({center,zoom:mobile?10.45+Math.log2(innerWidth/393):fitZoom(center,{top:16,bottom:40,left:16,right:70}),pitch:40,bearing:-12,padding:{top:0,bottom:0,left:0,right:0},duration:motion,essential:true});$('view').textContent='2D';$('view').setAttribute('aria-pressed','false');}
+ function wire(){
+  void mountSearch($('place-search'),{inside:p=>inside(p,grid.boundary),onSelect:p=>void selectPoint(p)});
+@@ -109,8 +111,9 @@
+    map.addSource('cloud',{type:'image',...cloudImage(grid,current?.values||grid.cells.map(()=>null),layout)});
+    const building=layers.find(l=>l.type==='fill-extrusion')?.id;
+    map.addLayer({id:'cloud',type:'raster',source:'cloud',paint:{'raster-opacity':['interpolate',['linear'],['zoom'],10,.9,15,.5,17,.25],'raster-fade-duration':0}},building||labels);
++   if(proto)initStationProto(map,{mock,base});
+    map.addSource('pick',{type:'geojson',data:empty});map.addLayer({id:'pick',type:'circle',source:'pick',paint:{'circle-radius':7,'circle-color':'#235954','circle-stroke-color':'#fff','circle-stroke-width':3}});
+-   map.on('click',e=>void selectPoint([e.lngLat.lng,e.lngLat.lat]));wire();home();if(mock&&params.has('sample')){void fixture('point_inside').then(sample=>{const cell=grid.cells.find(c=>c.grid_id===sample.grid_id);if(cell)void selectPoint(cell.center);});}
++   map.on('click',e=>void selectPoint([e.lngLat.lng,e.lngLat.lat]));wire();home();if(mock&&params.has('sample')){void fixture('point_inside').then(sample=>{const cell=grid.cells.find(c=>c.grid_id===sample.grid_id);if(cell)void selectPoint(cell.center);});}if(params.has('pick')){const q=params.get('pick').split(',').map(Number);if(q.length===2&&q.every(Number.isFinite))setTimeout(()=>void selectPoint(q),1500);if(params.get('evopen'))setTimeout(()=>openTarget(params.get('evopen')),6000);}
+   });
+   await refresh();timer=setInterval(()=>void refresh(),60000);
+  }catch(e){loadIssue=`화면을 불러올 수 없습니다. ${e.message}`;showStatus();$('retry').onclick=()=>location.reload();}
