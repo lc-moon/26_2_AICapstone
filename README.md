@@ -68,6 +68,7 @@ C:\26_2_AICapstone\
 │  ├─ calibrate.py         카메라별 보정(M2): 저장된 예측에 카메라마다 절편(또는 기울기+절편)을 얹어 시험 데이터로 채점
 │  ├─ per_camera.py        카메라별 모델(M3)·습도 한 칸(M4): Hugging Face·ⓐ·ⓑ에서 출발해 카메라마다 학습, 통합 모델·보정과 나란히 채점
 │  ├─ gradcam_compare.py   같은 사진에서 모델마다 본 곳을 나란히 (M3·M4 지름길 검사) → data\review\gradcam_compare.html
+│  ├─ gradcam_pairs.py     전시용 Grad-CAM (M6): 서비스 모델이 같은 카메라의 맑은 날·탁한 날에 본 곳, 아래 40% 모자이크 → data\review\m6\
 │  ├─ text_mask.py         화면 위 글자(시각·지명) 자리 찾기 → text_mask\ (CNN 입력에서 평균색으로 가림)
 │  ├─ text_mask\           장면마다 글자 자리 (한 번 만들고 눈으로 확인한 것)
 │  ├─ roi.py               ROI 상자 그리기 페이지 생성·결과 반영, 후보 5개(하늘·먼 건물·둘 다·위 1/3·위 60%)의 상자
@@ -238,6 +239,7 @@ python Model\cnn.py --version incheon_log --input top60 --tag folds --folds-only
 python Model\per_camera.py from_b from_b_head  ③ "한꺼번에": ⓑ에서 출발해 같은 28일로 카메라마다 (위 --folds-only를 먼저)
 python Model\cnn.py --version incheon_log --input top60 --epochs 12 --tag c14 --days 2026-10-10 2026-10-11 ...   인천 학습 날짜를 골라서 (원인 가르기 실험 C)
 python Model\gradcam_compare.py                같은 사진에서 모델마다 본 곳을 나란히 → data\review\gradcam_compare.html
+python Model\gradcam_pairs.py                  전시용 그림(M6): 카메라 20대 맑은 날·탁한 날 → data\review\m6\{카메라}.png·index.html (밖에 쓰기 전에 번호판 확인)
 python Model\cnn.py --version incheon_log --input top60 --lr-range   ⓑ 학습률 범위 시험 → data\review\lr_range_b.png (상한만 본다. 고르기는 연습시험으로)
 python Model\cnn.py --version incheon_log --input top60 --epochs 12 --tag 1019_lr3e-05 --lr 3e-5 --cv-only   학습률 비교용 연습시험만. 이긴 값은 같은 인자 + --final-only로 최종 모델
 python Model\cnn.py --version incheon_log --input top60 --epochs 12 --tag 1019 --hum phys   M4 ⓑ+습도: 마지막 층에 습도 한 칸(phys 물리식 / raw 그대로, --hum-lr로 습도 가중치 학습률)
