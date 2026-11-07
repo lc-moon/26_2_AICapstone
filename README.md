@@ -83,7 +83,7 @@ C:\26_2_AICapstone\
 │  ├─ export_onnx.py       PC에서 최종 모델을 ONNX로 바꾸고 PyTorch와 결과가 같은지 확인 → data\model\onnx\ (VM에는 scp)
 │  ├─ estimate.py          찍은 지 3분 넘은 사진 → 1분 습도·강수량·레이더로 거르기 → 추정 → data\estimates\ (1분마다, --latest: 최근 낮 회차로 확인)
 │  │                       처리한 사진마다 아래 40%를 모자이크한 화면용 사본을 카메라별로 덮어씀(.env CAM_DIR, 서비스 /cam/)
-│  ├─ infer_now.py         즉석 추론: 카메라 1대를 지금 찍어 바로 추정 (전시 '직접 해보기'용, --measure: 걸린 시간·메모리 측정)
+│  ├─ infer_now.py         즉석 추론: 카메라 1대를 지금 찍어 바로 추정 → JSON 한 줄 (전시 '직접 해보기', 서비스 API가 부른다. 밤·비·습도 거르기, 가린 사진 /cam/live/, 정기 추정 중이면 종료 코드 75. --measure: 시간·메모리)
 │  ├─ send.py              추정값 → 서비스 백엔드 POST /api/ingest/estimates (estimate.py가 끝에 부른다. .env에 주소·토큰이 없으면 건너뜀)
 │  └─ stations.json        카메라마다 습도를 받는 AWS 관측소 (학습 라벨과 같은 곳)
 │

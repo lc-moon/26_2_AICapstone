@@ -300,6 +300,22 @@ def check_preprocess(n=40):
     print(f"사진 {len(rows)}장: 표준화 값 최대 차이 {worst:.6f} (0이면 학습 때와 똑같다)")
 
 
+def hold_lock():
+    """즉석 추론(infer_now.py)과 같은 잠금 파일. 1GB VM에 모델 둘을 같이 올리지 않게, 즉석 추론이 돌고 있으면 끝날 때까지(약 12초) 기다린다.
+    즉석 추론은 반대로 기다리지 않고 종료 코드 75로 끝난다. 윈도우(PC)에서는 잠그지 않는다"""
+    try:
+        import fcntl
+    except ImportError:
+        return None
+    fd = os.open(OUT / ".lock", os.O_RDWR | os.O_CREAT, 0o666)
+    try:
+        os.fchmod(fd, 0o666)                           # API 서비스가 다른 사용자로 돌아도 열 수 있게
+    except PermissionError:
+        pass
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    return fd
+
+
 def send_live():
     """서비스 백엔드로 전송(send.py). 파일은 이미 저장했으므로 전송 쪽 문제는 로그만 남기고 넘어간다"""
     try:
@@ -341,6 +357,7 @@ def main():
             send_live()                                # 할 일이 없어도 못 보낸 행은 다시 보낸다
         return
     t0 = time.time()
+    lock = hold_lock()                                 # noqa: F841  (끝날 때까지 쥐고 있는다)
     rows = estimate(todo, mode, env_key())
     append(rows)
     try:
