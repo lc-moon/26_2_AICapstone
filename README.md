@@ -57,7 +57,10 @@ C:\26_2_AICapstone\
 │  ├─ make_mockup_boundary.py  서비스 시안이 쓰는 인천 내륙 경계 생성 → Web\mockup\
 │  ├─ make_service_shared.py   조원에게 줄 공통 자료(격자·경계·스키마·API 응답 예시) → data\service_shared\
 │  ├─ fetch_songui.py          에어코리아 PM2.5 조회
-│  └─ analyze_songui.py        PM2.5 등급 분포 분석
+│  ├─ analyze_songui.py        PM2.5 등급 분포 분석
+│  ├─ s6_charts.py             원리 페이지 결과 그래프(오차 비교·습도 치우침) → data\review\s6\
+│  ├─ s6_roi.py                원리 페이지 방법 그림(맑은 날·탁한 날 + 위쪽 60%), --sheet: 카메라 고르기용
+│  └─ station_floor.py         이웃 측정소를 답으로 냈을 때 오차(3.24)·측정소끼리 차이 — 원리 페이지 인용 숫자
 │
 ├─ Model\               로컬 학습 (RTX 3060 Ti). VM에는 올리지 않음
 │  ├─ features.py          사진마다 이미지 통계 계산 → data\model\features.csv
@@ -211,6 +214,18 @@ python Tools\make_service_shared.py --estimates data\estimates\estimates_vm.csv 
 ### `fetch_songui.py` / `analyze_songui.py` — PM2.5 라벨 분석
 에어코리아에서 측정소 데이터를 받아 농도 등급 분포를 집계합니다.
 고농도 구간 데이터가 부족하다는 구조적 리스크(`docs/현황.md` §5)의 근거입니다.
+
+### `s6_charts.py` / `s6_roi.py` / `station_floor.py` — 원리 페이지(S6) 그림과 인용 숫자
+원리 페이지(서비스 저장소 `web/about/`)에 넣은 그림을 다시 그리고, 글에 인용한 숫자를 다시 계산합니다. 모두 `data\review\s6\`에 저장하거나 화면에만 출력합니다(2026-11-08).
+
+```
+python Tools\s6_charts.py           결과 절 그래프: 오차 비교 막대(→ 2_error.png), 습도 구간별 치우침(→ 3_humidity.png)
+python Tools\s6_roi.py 79           방법 절 그림: 같은 카메라의 맑은 날·탁한 날 + 위쪽 60% 점선(→ 1_roi.png는 79번)
+python Tools\s6_roi.py --sheet      카메라 고르기용: 모든 카메라의 사진 쌍을 5대씩 한 장에
+python Tools\station_floor.py       이웃 측정소 실측을 답으로 낸 MAE(3.24)·측정소끼리 차이(3~5km 3.10)·모델 오차 나누기
+```
+
+결과 절 Grad-CAM 그림(`4_gradcam.png`)은 `Model\gradcam_pairs.py --stack 103`으로 그립니다.
 
 ---
 
